@@ -26,7 +26,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل دقيق وعالي الدقة للكابتشا عبر Gemini"""
+    """تحليل بصري دقيق جداً لتجنب أخطاء تكرار الكابتشا"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -36,12 +36,13 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
             image_bytes = f.read()
 
         prompt = (
-            f"You are an expert AI at solving reCAPTCHA challenges. This image contains a grid of exactly {total_tiles} squares, "
-            f"numbered sequentially from 1 to {total_tiles} row by row, starting from top-left (1) to bottom-right ({total_tiles}). "
-            "Read the target object specified in the instruction text at the top very carefully. "
-            "Identify every single tile that contains any part of the requested object. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [3, 7, 11]). "
-            "Do not include any explanations, markdown, or extra text, just the raw JSON list."
+            f"You are an elite AI vision model specialized in solving reCAPTCHA v2 image challenges. "
+            f"This image is a grid of exactly {total_tiles} tiles, numbered sequentially from 1 to {total_tiles} row by row (top-left to bottom-right). "
+            "Read the target object in the instruction text at the top very carefully (e.g., crosswalks, traffic lights, bicycles, etc.). "
+            "Be extremely thorough: select EVERY tile that contains even a small portion of the requested object. Do not miss any matching tiles, "
+            "as missing them causes the captcha to fail and repeat. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [2, 5, 6]). "
+            "Do not include any extra text, explanations, or markdown formatting."
         )
 
         response = ai_client.models.generate_content(
@@ -153,7 +154,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
 
-                # حلقة ذكية لمعالجة جولات الكابتشا المتعددة (حتى لو ظهرت عدة مرات أو زر NEXT)
+                # حل كابتشا الصور في حلقة ذكية معتمدة على دقة أعلى
                 max_attempts = 10
                 for attempt in range(max_attempts):
                     bframe = None
@@ -172,9 +173,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
 
                     if not is_captcha_active:
-                        break # الكابتشا اختفت تماماً، نخرج من الحلقة بأمان
+                        break # تم حل الكابتشا واختفت النافذة بنجاح
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 معالجة جولة الصور (محاولة {attempt + 1})...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور بدقة (محاولة {attempt + 1})...")
                     
                     screenshot_path = f"captcha_attempt_{attempt}.png"
                     try:
@@ -193,23 +194,23 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_tiles = len(tiles) if tiles else 9
 
                     correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini الدقيق للمربعات: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
                             if tiles and box_num <= len(tiles):
                                 await tiles[box_num - 1].click(force=True)
-                                await asyncio.sleep(0.4)
+                                await asyncio.sleep(0.3)
                         
-                        # البحث عن زر التحقق أو الانتقال (VERIFY أو NEXT) والنقر عليه بدقة
+                        # النقر على زر التحقق أو التالي أيهما متاح
                         action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
                         if action_btn:
                             await action_btn.click(force=True)
                             await page.wait_for_timeout(4000)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
+                        print(f"خطأ أثناء النقر على المربعات: {e}")
 
-                # بعد التأكد التام من اختفاء الكابتشا، النقر على زر "Obtener código" للحصول على النتيجة النهائية
+                # بعد اختفاء الكابتشا تماماً، النقر فوراً على زر "Obtener código" لجلب النتيجة
                 await page.wait_for_timeout(1500)
                 try:
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
@@ -225,7 +226,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية للطلب رقم {i+1}:")
 
-                # استخراج الكود أو الرابط الناتج وإضافته للقائمة
+                # استخراج الكود أو الرابط الناتج من الصفحة
                 try:
                     content = await page.content()
                     found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
