@@ -130,31 +130,31 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(1000)
 
-                # الضغط على زر الإرسال الرئيسي
-                submit_btn = await page.query_selector("button[type='submit'], input[type='submit'], button:has-text('Obtener código')")
+                # الضغط على زر الطلب الرئيسي مرة واحدة
+                submit_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                 if submit_btn:
                     await submit_btn.click(force=True)
 
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2000)
 
-                # النقر على مربع "أنا لست روبوت" إذا ظهر
-                recaptcha_frame = None
-                for frame in page.frames:
-                    if "anchor" in frame.url:
-                        recaptcha_frame = frame
-                        break
+                # النقر على مربع "أنا لست روبوت" مرة واحدة فقط عند ظهوره
+                try:
+                    recaptcha_frame = None
+                    for frame in page.frames:
+                        if "anchor" in frame.url:
+                            recaptcha_frame = frame
+                            break
 
-                if recaptcha_frame:
-                    try:
-                        checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=5000)
+                    if recaptcha_frame:
+                        checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=3000)
                         if checkbox:
                             await checkbox.click()
-                            await page.wait_for_timeout(3000)
-                    except Exception as e:
-                        print(f"فشل النقر على مربع التحقق: {e}")
+                            await page.wait_for_timeout(2000)
+                except Exception as e:
+                    print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
 
-                # حلقة ذكية تضمن عدم الانتقال إلا بعد اختفاء نافذة صور الكابتشا تماماً (حتى لو تكررت عدة مرات)
-                max_attempts = 10
+                # حل كابتشا الصور في حلقة مستقلة حتى تختفي تماماً دون تكرار خاطئ
+                max_attempts = 8
                 for attempt in range(max_attempts):
                     bframe = None
                     for frame in page.frames:
@@ -172,9 +172,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
 
                     if not is_captcha_active:
-                        break # الكابتشا اختفت، نخرج من الحلقة
+                        break # الكابتشا اختفت تماماً، نخرج من الحلقة
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 كابتشا الصور نشطة (المحاولة {attempt + 1})، جاري حلها...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور (محاولة {attempt + 1})...")
                     
                     screenshot_path = f"captcha_attempt_{attempt}.png"
                     try:
@@ -186,14 +186,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         await page.screenshot(path=screenshot_path)
 
-                    # إرسال صورة الكابتشا للمستخدم
                     with open(screenshot_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا الحالية (المحاولة {attempt + 1}):")
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 تحدي الصور (محاولة {attempt + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
 
-                    # حل الكابتشا عبر Gemini
                     correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
                     await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
 
@@ -206,26 +204,27 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         verify_btn = await bframe.query_selector("#recaptcha-verify-button")
                         if verify_btn:
                             await verify_btn.click(force=True)
-                            await page.wait_for_timeout(5000) # انتظار استجابة التحقق
+                            await page.wait_for_timeout(4000)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
+                        print(f"خطأ أثناء النقر على المربعات: {e}")
 
-                # بعد التأكد من حل الكابتشا واختفائها، النقر على زر "Obtener código" للحصول على النتيجة النهائية
+                # بعد التأكد التام من اختفاء الكابتشا، النقر على زر "Obtener código" لجلب النتيجة النهائية
+                await page.wait_for_timeout(1000)
                 try:
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                     if obtener_btn:
                         await obtener_btn.click(force=True)
                         await page.wait_for_timeout(4000)
                 except Exception as e:
-                    print(f"خطأ أثناء النقر النهائي: {e}")
+                    print(f"خطأ أثناء النقر على زر جلب الكود: {e}")
 
-                # التقاط صورة للنتيجة بعد إتمام الطلب بالكامل
+                # التقاط صورة للنتيجة النهائية بعد الانتهاء
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3)
                 with open(shot3, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1} (بعد إتمام الكابتشا):")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية للطلب رقم {i+1}:")
 
-                # استخراج الكود من الصفحة بعد نجاح العملية
+                # استخراج الكود أو الرابط الناتج وإضافته للقائمة
                 try:
                     content = await page.content()
                     found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
@@ -242,9 +241,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if all_extracted_codes:
                 final_text = "\n".join(all_extracted_codes)
                 await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الأكواد المستخرجة:\n{final_text}")
-                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} كود إلى قناتك!")
+                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} كود إلى قناتك.")
             else:
-                await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصور المرسلة للتأكد من النتيجة.")
+                await status_msg.edit_text(f"✅ انتهت العملية، يرجى التحقق من الصور المرسلة.")
                 
             await browser.close()
             
