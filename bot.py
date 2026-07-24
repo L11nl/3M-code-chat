@@ -8,7 +8,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
-# قراءة المتغيرات بأمان من بيئة النظام (Railway Variables)
 TOKEN = os.getenv("TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
 
@@ -25,8 +24,7 @@ HEADERS = {
 }
 
 async def get_fresh_cookies_with_stealth():
-    """دالة خلفية لفتح متصفح خفي وتخطي الفحص بذكاء"""
-    logging.info("جاري تحديث الجلسة واكتساب كوكيز جديدة عبر المتصفح الخفي...")
+    logging.info("جاري جلب الكوكيز بسرعة...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -34,7 +32,6 @@ async def get_fresh_cookies_with_stealth():
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-accelerated-2d-canvas",
                 "--disable-gpu"
             ]
         )
@@ -44,7 +41,6 @@ async def get_fresh_cookies_with_stealth():
         )
         page = await context.new_page()
         
-        # حقن كود التخفي لتجاوز كشف المتصفح الآلي بشكل نظيف ومستقر
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
@@ -52,14 +48,15 @@ async def get_fresh_cookies_with_stealth():
         """)
         
         try:
-            await page.goto(SITE_URL, timeout=45000, wait_until="networkidle")
-            await page.wait_for_timeout(5000)
+            # استخدام domcontentloaded بدلاً من networkidle لعدم التعليق
+            await page.goto(SITE_URL, timeout=30000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(3000)
             cookies_list = await context.cookies()
             cookies_dict = {c['name']: c['value'] for c in cookies_list}
             await browser.close()
             return cookies_dict
         except Exception as e:
-            logging.error(f"فشل جلب الكوكيز عبر المتصفح: {e}")
+            logging.error(f"خطأ في المتصفح: {e}")
             await browser.close()
             return None
 
@@ -71,7 +68,7 @@ async def fetch_code(client, cookies):
     email = generate_random_email()
     files = {"assignOpenAICode": (None, "true"), "email": (None, email)}
     try:
-        response = await client.post(URL, files=files, cookies=cookies, timeout=12.0)
+        response = await client.post(URL, files=files, cookies=cookies, timeout=10.0)
         if response.status_code == 200:
             data = response.json()
             if data.get("success") == 1:
@@ -81,11 +78,7 @@ async def fetch_code(client, cookies):
     return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🚀 **البوت يعمل الآن بسيرفر سحابي آمن**\n\n"
-        f"أرسل عدد الأكواد التي تريد استخراجها وسيقوم البوت بالعمل تلقائياً.", 
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🚀 البوت جاهز ويعمل الآن بنظام الجلسات السريعة.\nأرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -93,11 +86,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري إعداد الجلسة الذكية واستخراج {count} كود...")
+    status_msg = await update.message.reply_text(f"⚡ جاري معالجة طلب استخراج {count} كود...")
 
     cookies = await get_fresh_cookies_with_stealth()
     if not cookies:
-        await status_msg.edit_text("❌ فشل الاتصال الأمني بالموقع حالياً، يرجى المحاولة لاحقاً.")
+        await status_msg.edit_text("❌ تعذر الاتصال بالموقع، حاول مرة أخرى.")
         return
 
     all_codes = []
@@ -119,7 +112,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     valid_results = [res for res in results if res]
 
             all_codes.extend(valid_results)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
     if all_codes:
         final_message = "\n".join(all_codes)
@@ -127,22 +120,20 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=chunk)
             except Exception as e:
-                await status_msg.edit_text(f"❌ فشل الإرسال للقناة:\nالخطأ: {e}")
+                await status_msg.edit_text(f"❌ خطأ في إرسال الكود للقناة: {e}")
                 return
 
-        await status_msg.edit_text(f"✅ تم بنجاح استخراج وإرسال {len(all_codes)} كود إلى قناتك الخاصة.")
+        await status_msg.edit_text(f"✅ تم بنجاح استخراج وإرسال {len(all_codes)} كود إلى قناتك.")
     else:
-        await status_msg.edit_text("❌ لم يتم استخراج أي كود، يبدو أن الموقع فرض قيوداً مؤقتة.")
+        await status_msg.edit_text("❌ لم يتم استخراج أي كود، جرب مرة أخرى.")
 
 def main():
     if not TOKEN:
-        print("خطأ: يرجى تعيين متغير البيئة TOKEN في المنصة.")
+        print("خطأ: يرجى تعيين متغير البيئة TOKEN.")
         return
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_request))
-    
-    print("البوت يعمل على السيرفر ومستعد لتلقي الطلبات...")
     app.run_polling()
 
 if __name__ == "__main__":
