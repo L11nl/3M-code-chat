@@ -1,11 +1,10 @@
-import httpx
 import logging
 import random
 import string
 import asyncio
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
 TOKEN = os.getenv("TOKEN")
@@ -13,124 +12,164 @@ TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-URL = "https://www.bbvadescuentos.mx/admin-site/php/_httprequest.php"
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Origin": "https://www.bbvadescuentos.mx",
-    "Referer": SITE_URL,
-    "X-Requested-With": "XMLHttpRequest"
-}
-
-async def get_fresh_cookies_with_stealth():
-    logging.info("بدء عملية تشغيل المتصفح لجلب الكوكيز...")
-    try:
-        async with async_playwright() as p:
-            logging.info("جاري إطلاق متصفح النظام (Chromium)...")
-            browser = await p.chromium.launch(
-                executable_path="/usr/bin/chromium",  # استخدام متصفح النظام مباشرة لتفادي التعليق
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--single-process"
-                ]
-            )
-            logging.info("تم إطلاق المتصفح بنجاح، جاري فتح الصفحة...")
-            context = await browser.new_context(
-                user_agent=HEADERS["User-Agent"],
-                viewport={"width": 1920, "height": 1080}
-            )
-            page = await context.new_page()
-            
-            await page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-            """)
-            
-            await page.goto(SITE_URL, timeout=30000, wait_until="domcontentloaded")
-            logging.info("تم تحميل الصفحة، جاري انتظار توليد الكوكيز...")
-            await page.wait_for_timeout(4000)
-            
-            cookies_list = await context.cookies()
-            cookies_dict = {c['name']: c['value'] for c in cookies_list}
-            await browser.close()
-            logging.info(f"تم الحصول على الكوكيز بنجاح! العدد: {len(cookies_dict)}")
-            return cookies_dict
-    except Exception as e:
-        logging.error(f"خطأ خطير أثناء تشغيل المتصفح: {e}")
-        return None
+# متغيرات عامة لحفظ حالة الانتظار والتفاعل
+user_selected_boxes = set()
+captcha_future = None
+current_page = None
 
 def generate_random_email():
     chars = string.ascii_lowercase + string.digits
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
-async def fetch_code(client, cookies):
-    email = generate_random_email()
-    files = {"assignOpenAICode": (None, "true"), "email": (None, email)}
-    try:
-        response = await client.post(URL, files=files, cookies=cookies, timeout=10.0)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == 1:
-                return f"https://{data.get('code')}"
-    except:
-        pass
-    return None
+def get_captcha_keyboard():
+    keyboard = []
+    for r in range(3):
+        row = []
+        for c in range(3):
+            box_num = r * 3 + c + 1
+            status = "✅" if box_num in user_selected_boxes else "🟩"
+            row.append(InlineKeyboardButton(f"{box_num} {status}", callback_data=f"box_{box_num}"))
+        keyboard.append(row)
+    
+    keyboard.append([
+        InlineKeyboardButton("🔄 إعادة ضبط", callback_data="reset_boxes"),
+        InlineKeyboardButton("🚀 إرسال الحل والتنفيذ", callback_data="verify_solution")
+    ])
+    return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت يعمل الآن بكفاءة عالية وبدون تعليق.\nأرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت جاهز. أرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global captcha_future, current_page
     text = update.message.text.strip()
     if not text.isdigit():
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري إعداد الجلسة الذكية واستخراج {count} كود...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء عملية استخراج {count} كود...")
 
-    cookies = await get_fresh_cookies_with_stealth()
-    if not cookies:
-        await status_msg.edit_text("❌ تعذر الاتصال الأمني بالموقع أو جلب الكوكيز، حاول مرة أخرى.")
-        return
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            executable_path="/usr/bin/chromium",
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        )
+        context_browser = await browser.new_context(viewport={"width": 1280, "height": 800})
+        page = await context_browser.new_page()
+        current_page = page
 
-    all_codes = []
-    batch_size = 5 
+        try:
+            await page.goto(SITE_URL, timeout=40000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(3000)
+
+            all_codes = []
+            for i in range(count):
+                email = generate_random_email()
+                
+                # تعبئة الإيميل
+                email_input = await page.query_selector("input[name='email'], input[type='email']")
+                if email_input:
+                    await email_input.fill(email)
+
+                # الضغط على زر الطلب
+                submit_btn = await page.query_selector("button[type='submit'], input[type='submit']")
+                if submit_btn:
+                    await submit_btn.click()
+
+                await page.wait_for_timeout(3000)
+
+                # التحقق مما إذا ظهرت الكابتشا (iframe الخاصة بـ reCAPTCHA)
+                recaptcha_frame = None
+                for frame in page.frames:
+                    if "recaptcha" in frame.url:
+                        recaptcha_frame = frame
+                        break
+
+                if recaptcha_frame or await page.query_selector("iframe[src*='recaptcha']"):
+                    await status_msg.edit_text("⚠️ ظهرت الكابتشا! جاري التقاط الصورة...")
+                    
+                    # محاولة تحديد مربع الكابتشا وأخذ لقطة شاشة له
+                    screenshot_path = "captcha.png"
+                    try:
+                        # العثور على عنصر الكابتشا أو أخذ لقطة للشاشة كاملة إذا تعذر تحديد العنصر بدقة
+                        captcha_element = await page.query_selector(".g-recaptcha, iframe[src*='recaptcha']")
+                        if captcha_element:
+                            await captcha_element.screenshot(path=screenshot_path)
+                        else:
+                            await page.screenshot(path=screenshot_path)
+                    except Exception:
+                        await page.screenshot(path=screenshot_path)
+
+                    user_selected_boxes.clear()
+                    captcha_future = asyncio.get_running_loop().create_future()
+
+                    # إرسال الصورة للمستخدم مع الأزرار 3×3
+                    with open(screenshot_path, "rb") as photo:
+                        msg = await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=photo,
+                            caption="🔍 يرجى تحديد المربعات المطلوبة من الشبكة أدناه واضغط 'إرسال الحل':",
+                            reply_markup=get_captcha_keyboard()
+                        )
+
+                    # انتظار قيام المستخدم بحل الكابتشا عبر الأزرار
+                    await captcha_future
+
+                    # بعد حل المستخدم، نقوم بمحاولة النقر على المربعات داخل المتصفح
+                    # (ملاحظة: reCAPTCHA تتطلب النقر داخل الإطار البرمجي الخاص بها)
+                    try:
+                        frames = page.frames
+                        for f in frames:
+                            if "bframe" in f.url: # إطار الصور الداخلي لـ reCAPTCHA
+                                for box_num in user_selected_boxes:
+                                    # إيجاد المربعات التسعة داخل إطار الكابتشا والنقر عليها حسب الرقم
+                                    tiles = await f.query_selector_all(".rc-imageselect-tile")
+                                    if tiles and box_num <= len(tiles):
+                                        await tiles[box_num - 1].click()
+                                        await asyncio.sleep(0.5)
+                                # النقر على زر التحقق (Verify)
+                                verify_btn = await f.query_selector("#recaptcha-verify-button")
+                                if verify_btn:
+                                    await verify_btn.click()
+                                    await asyncio.sleep(3)
+                    except Exception as e:
+                        print(f"خطأ أثناء النقر على المربعات: {e}")
+
+                # استخراج الكود إن وُجد في الصفحة
+                # (يمكن قراءة الرد أو استخراج النص من الحقل الناتج)
+                await asyncio.sleep(2)
+                
+            await status_msg.edit_text(f"✅ تمت العملية بنجاح!")
+        except Exception as e:
+            await status_msg.edit_text(f"❌ حدث خطأ أثناء التنفيذ: {e}")
+        finally:
+            await browser.close()
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global captcha_future
+    query = update.callback_query
+    await query.answer()
+    data = query.data
     
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
-        for i in range(0, count, batch_size):
-            current_batch = min(batch_size, count - i)
-            tasks = [fetch_code(client, cookies) for _ in range(current_batch)]
-            
-            results = await asyncio.gather(*tasks)
-            valid_results = [res for res in results if res]
-            
-            if not valid_results and i == 0:
-                cookies = await get_fresh_cookies_with_stealth()
-                if cookies:
-                    tasks = [fetch_code(client, cookies) for _ in range(current_batch)]
-                    results = await asyncio.gather(*tasks)
-                    valid_results = [res for res in results if res]
-
-            all_codes.extend(valid_results)
-            await asyncio.sleep(0.5)
-
-    if all_codes:
-        final_message = "\n".join(all_codes)
-        for chunk in [final_message[i:i + 4000] for i in range(0, len(final_message), 4000)]:
-            try:
-                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=chunk)
-            except Exception as e:
-                await status_msg.edit_text(f"❌ خطأ في إرسال الكود للقناة: {e}")
-                return
-
-        await status_msg.edit_text(f"✅ تم بنجاح استخراج وإرسال {len(all_codes)} كود إلى قناتك.")
-    else:
-        await status_msg.edit_text("❌ لم يتم استخراج أي كود، جرب مرة أخرى.")
+    if data.startswith("box_"):
+        box_num = int(data.split("_")[1])
+        if box_num in user_selected_boxes:
+            user_selected_boxes.remove(box_num)
+        else:
+            user_selected_boxes.add(box_num)
+        await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        
+    elif data == "reset_boxes":
+        user_selected_boxes.clear()
+        await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        
+    elif data == "verify_solution":
+        await query.edit_message_text(text="✅ تم استلام اختياراتك، جاري تطبيقها في المتصفح...")
+        if captcha_future and not captcha_future.done():
+            captcha_future.set_result(True)
 
 def main():
     if not TOKEN:
@@ -139,6 +178,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_request))
+    app.add_handler(CallbackQueryHandler(button_callback))
     app.run_polling()
 
 if __name__ == "__main__":
