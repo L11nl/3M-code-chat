@@ -153,8 +153,8 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
 
-                # حل كابتشا الصور في حلقة مستقلة حتى تختفي تماماً دون تكرار خاطئ
-                max_attempts = 8
+                # حلقة ذكية لمعالجة جولات الكابتشا المتعددة (حتى لو ظهرت عدة مرات أو زر NEXT)
+                max_attempts = 10
                 for attempt in range(max_attempts):
                     bframe = None
                     for frame in page.frames:
@@ -172,9 +172,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
 
                     if not is_captcha_active:
-                        break # الكابتشا اختفت تماماً، نخرج من الحلقة
+                        break # الكابتشا اختفت تماماً، نخرج من الحلقة بأمان
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور (محاولة {attempt + 1})...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 معالجة جولة الصور (محاولة {attempt + 1})...")
                     
                     screenshot_path = f"captcha_attempt_{attempt}.png"
                     try:
@@ -187,7 +187,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await page.screenshot(path=screenshot_path)
 
                     with open(screenshot_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 تحدي الصور (محاولة {attempt + 1}):")
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 تحدي الصور (المحاولة {attempt + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
@@ -201,15 +201,16 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 await tiles[box_num - 1].click(force=True)
                                 await asyncio.sleep(0.4)
                         
-                        verify_btn = await bframe.query_selector("#recaptcha-verify-button")
-                        if verify_btn:
-                            await verify_btn.click(force=True)
+                        # البحث عن زر التحقق أو الانتقال (VERIFY أو NEXT) والنقر عليه بدقة
+                        action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
+                        if action_btn:
+                            await action_btn.click(force=True)
                             await page.wait_for_timeout(4000)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر على المربعات: {e}")
+                        print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
 
-                # بعد التأكد التام من اختفاء الكابتشا، النقر على زر "Obtener código" لجلب النتيجة النهائية
-                await page.wait_for_timeout(1000)
+                # بعد التأكد التام من اختفاء الكابتشا، النقر على زر "Obtener código" للحصول على النتيجة النهائية
+                await page.wait_for_timeout(1500)
                 try:
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                     if obtener_btn:
