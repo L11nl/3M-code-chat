@@ -4,7 +4,6 @@ import string
 import asyncio
 import os
 import json
-import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
@@ -26,7 +25,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """إرسال صورة الكابتشا مع خريطة إحداثيات دقيقة جداً لـ Gemini لتفادي الأخطاء"""
+    """تحليل دقيق وعالي الدقة لتحدي الصور عبر Gemini"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -39,10 +38,9 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
 
         prompt = (
             f"You are an expert AI vision model at solving reCAPTCHA challenges. This image is a {grid_desc}. "
-            "Read the instruction text at the top very carefully (e.g., 'a fire hydrant', 'crosswalks', 'traffic lights'). "
+            "Read the instruction text at the top very carefully (e.g., 'crosswalks', 'traffic lights', 'a fire hydrant'). "
             "Examine each tile meticulously. Select ONLY the tile numbers that genuinely contain the requested object. "
-            "Do not guess or include tiles that do not clearly contain the object. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [4]). "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [2, 5]). "
             "Do not include any extra text, explanations, or markdown formatting, just the raw JSON list."
         )
 
@@ -153,9 +151,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await checkbox.click()
                             await page.wait_for_timeout(2000)
                 except Exception as e:
-                    print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
+                    print(f"مربع التحقق غير موجود: {e}")
 
-                # حل كابتشا الصور في حلقة ذكية معتمدة على دقة تحليل Gemini الجديدة
+                # حل كابتشا الصور في حلقة ذكية حتى تختفي تماماً
                 max_attempts = 10
                 for attempt in range(max_attempts):
                     bframe = None
@@ -176,7 +174,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break # تم حل الكابتشا واختفت النافذة بنجاح
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور بذكاء (محاولة {attempt + 1})...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور (محاولة {attempt + 1})...")
                     
                     screenshot_path = f"captcha_attempt_{attempt}.png"
                     try:
@@ -195,7 +193,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     total_tiles = len(tiles) if tiles else 9
 
                     correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini الدقيق للمربعات: {correct_boxes}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
@@ -203,7 +201,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 await tiles[box_num - 1].click(force=True)
                                 await asyncio.sleep(0.3)
                         
-                        # النقر على زر التحقق أو التالي أيهما متاح
                         action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
                         if action_btn:
                             await action_btn.click(force=True)
@@ -217,7 +214,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                     if obtener_btn:
                         await obtener_btn.click(force=True)
-                        await page.wait_for_timeout(5000)
+                        await page.wait_for_timeout(4000)
                 except Exception as e:
                     print(f"خطأ أثناء النقر على زر جلب الكود: {e}")
 
@@ -227,23 +224,24 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية للطلب رقم {i+1}:")
 
-                # استخراج الأكواد أو الروابط الناتجة من الصفحة بدقة
+                # حل جذري لاستخراج الكود مباشرة من الذاكرة البرمجية للحقول (حتى لو كانت مخفية بصرياً تحت الكابتشا)
                 try:
-                    content = await page.content()
-                    found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
-                    for link in found_links:
-                        if "openai" in link or "code" in link or "bbva" in link:
-                            if link not in all_extracted_codes and SITE_URL not in link:
-                                all_extracted_codes.append(link)
+                    extracted_values = await page.evaluate("""() => {
+                        const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
+                        let values = [];
+                        inputs.forEach(el => {
+                            if (el.value && el.value.trim().length > 2 && !el.value.includes('@')) {
+                                values.push(el.value.trim());
+                            }
+                        });
+                        return values;
+                    }""")
                     
-                    # محاولة استخراج أي نص يمثل الكود مباشرة إذا ظهر في حاوية النتيجة
-                    result_element = await page.query_selector(".result-code, #code, pre, code")
-                    if result_element:
-                        code_text = await result_element.inner_text()
-                        if code_text and code_text.strip() not in all_extracted_codes:
-                            all_extracted_codes.append(code_text.strip())
-                except:
-                    pass
+                    for val in extracted_values:
+                        if val not in all_extracted_codes and SITE_URL not in val:
+                            all_extracted_codes.append(val)
+                except Exception as e:
+                    print(f"خطأ في استخراج الكود من الحقول: {e}")
 
                 await asyncio.sleep(2)
 
