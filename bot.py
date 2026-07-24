@@ -3,14 +3,14 @@ import logging
 import random
 import string
 import asyncio
+import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
-# ---------- إعدادات البوت والقناة ----------
-TOKEN = "2051861765:AAEktLeDoXO57rudwHnxQ5RimkB7Et0XYS8"
-TARGET_CHANNEL_ID = -1003642554894  
+# قراءة المتغيرات بأمان من بيئة النظام (Railway Variables)
+TOKEN = os.getenv("TOKEN")
+TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
@@ -25,7 +25,7 @@ HEADERS = {
 }
 
 async def get_fresh_cookies_with_stealth():
-    """دالة خلفية لفتح متصفح خفي مخفي البصمة وتجاوز الحماية لجلب كوكيز نظيفة"""
+    """دالة خلفية لفتح متصفح خفي وتخطي الفحص بذكاء"""
     logging.info("جاري تحديث الجلسة واكتساب كوكيز جديدة عبر المتصفح الخفي...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -44,12 +44,16 @@ async def get_fresh_cookies_with_stealth():
         )
         page = await context.new_page()
         
-        # تطبيق أدوات التخفي لمنع كشف البوت
-        await stealth_async(page)
+        # حقن كود التخفي لتجاوز كشف المتصفح الآلي بشكل نظيف ومستقر
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
         
         try:
             await page.goto(SITE_URL, timeout=45000, wait_until="networkidle")
-            await page.wait_for_timeout(5000) # انتظار توليد الحماية للكوكيز
+            await page.wait_for_timeout(5000)
             cookies_list = await context.cookies()
             cookies_dict = {c['name']: c['value'] for c in cookies_list}
             await browser.close()
@@ -91,7 +95,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = int(text)
     status_msg = await update.message.reply_text(f"⚡ جاري إعداد الجلسة الذكية واستخراج {count} كود...")
 
-    # جلب كوكيز طازجة تلقائياً عبر المتصفح الخفي في الخلفية
     cookies = await get_fresh_cookies_with_stealth()
     if not cookies:
         await status_msg.edit_text("❌ فشل الاتصال الأمني بالموقع حالياً، يرجى المحاولة لاحقاً.")
@@ -108,7 +111,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             results = await asyncio.gather(*tasks)
             valid_results = [res for res in results if res]
             
-            # إذا انتهت صلاحية الجلسة، يتم تحديثها تلقائياً في الخلفية
             if not valid_results and i == 0:
                 cookies = await get_fresh_cookies_with_stealth()
                 if cookies:
@@ -133,6 +135,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("❌ لم يتم استخراج أي كود، يبدو أن الموقع فرض قيوداً مؤقتة.")
 
 def main():
+    if not TOKEN:
+        print("خطأ: يرجى تعيين متغير البيئة TOKEN في المنصة.")
+        return
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_request))
