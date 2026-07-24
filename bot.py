@@ -130,18 +130,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(1000)
 
-                # الضغط على زر "Obtener código" أو زر الإرسال الرئيسي
+                # الضغط على زر الإرسال الرئيسي
                 submit_btn = await page.query_selector("button[type='submit'], input[type='submit'], button:has-text('Obtener código')")
                 if submit_btn:
                     await submit_btn.click(force=True)
 
                 await page.wait_for_timeout(3000)
-
-                # التقاط صورة بعد محاولة الإرسال
-                shot2 = "step_2_submitted.png"
-                await page.screenshot(path=shot2)
-                with open(shot2, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل ({email}) والنقر على زر الطلب.")
 
                 # النقر على مربع "أنا لست روبوت" إذا ظهر
                 recaptcha_frame = None
@@ -159,69 +153,77 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"فشل النقر على مربع التحقق: {e}")
 
-                # نظام تفاعلي ذكي لمعالجة جولات الكابتشا المتعددة
-                max_captcha_rounds = 5
-                for round_num in range(max_captcha_rounds):
+                # حلقة ذكية تضمن عدم الانتقال إلا بعد اختفاء نافذة صور الكابتشا تماماً (حتى لو تكررت عدة مرات)
+                max_attempts = 10
+                for attempt in range(max_attempts):
                     bframe = None
                     for frame in page.frames:
                         if "bframe" in frame.url:
                             bframe = frame
                             break
 
-                    if bframe and await bframe.query_selector(".rc-imageselect-payload"):
-                        await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التقاطها وتحليلها بدقة...")
-                        
-                        screenshot_path = f"captcha_round_{round_num}.png"
+                    is_captcha_active = False
+                    if bframe:
                         try:
-                            captcha_element = await page.query_selector("iframe[src*='bframe']")
-                            if captcha_element:
-                                await captcha_element.screenshot(path=screenshot_path)
-                            else:
-                                await page.screenshot(path=screenshot_path)
-                        except Exception:
+                            payload = await bframe.query_selector(".rc-imageselect-payload")
+                            if payload and await payload.is_visible():
+                                is_captcha_active = True
+                        except:
+                            pass
+
+                    if not is_captcha_active:
+                        break # الكابتشا اختفت، نخرج من الحلقة
+
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 كابتشا الصور نشطة (المحاولة {attempt + 1})، جاري حلها...")
+                    
+                    screenshot_path = f"captcha_attempt_{attempt}.png"
+                    try:
+                        captcha_element = await page.query_selector("iframe[src*='bframe']")
+                        if captcha_element:
+                            await captcha_element.screenshot(path=screenshot_path)
+                        else:
                             await page.screenshot(path=screenshot_path)
+                    except Exception:
+                        await page.screenshot(path=screenshot_path)
 
-                        # إرسال صورة الكابتشا للمستخدم
-                        with open(screenshot_path, "rb") as photo:
-                            await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
+                    # إرسال صورة الكابتشا للمستخدم
+                    with open(screenshot_path, "rb") as photo:
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا الحالية (المحاولة {attempt + 1}):")
 
-                        # حساب عدد المربعات بدقة ديناميكية
-                        tiles = await bframe.query_selector_all(".rc-imageselect-tile")
-                        total_tiles = len(tiles) if tiles else 9
+                    tiles = await bframe.query_selector_all(".rc-imageselect-tile")
+                    total_tiles = len(tiles) if tiles else 9
 
-                        # حل الكابتشا عبر Gemini
-                        correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
-                        await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                    # حل الكابتشا عبر Gemini
+                    correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
 
-                        try:
-                            for box_num in correct_boxes:
-                                if tiles and box_num <= len(tiles):
-                                    await tiles[box_num - 1].click(force=True)
-                                    await asyncio.sleep(0.4)
-                            
-                            verify_btn = await bframe.query_selector("#recaptcha-verify-button")
-                            if verify_btn:
-                                await verify_btn.click(force=True)
-                                await page.wait_for_timeout(4000)
-                        except Exception as e:
-                            print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
-                    else:
-                        break # تختفي الكابتشا إذا تم حلها بالكامل
+                    try:
+                        for box_num in correct_boxes:
+                            if tiles and box_num <= len(tiles):
+                                await tiles[box_num - 1].click(force=True)
+                                await asyncio.sleep(0.4)
+                        
+                        verify_btn = await bframe.query_selector("#recaptcha-verify-button")
+                        if verify_btn:
+                            await verify_btn.click(force=True)
+                            await page.wait_for_timeout(5000) # انتظار استجابة التحقق
+                    except Exception as e:
+                        print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
 
-                # بعد حل الكابتشا، التأكد من النقر على زر "Obtener código" لإتمام الطلب وجلب النتيجة
+                # بعد التأكد من حل الكابتشا واختفائها، النقر على زر "Obtener código" للحصول على النتيجة النهائية
                 try:
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                     if obtener_btn:
                         await obtener_btn.click(force=True)
                         await page.wait_for_timeout(4000)
                 except Exception as e:
-                    print(f"خطأ أثناء النقر النهائي على زر الحصول على الكود: {e}")
+                    print(f"خطأ أثناء النقر النهائي: {e}")
 
-                # التقاط صورة للنتيجة بعد إتمام الطلب
+                # التقاط صورة للنتيجة بعد إتمام الطلب بالكامل
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3)
                 with open(shot3, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1}:")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1} (بعد إتمام الكابتشا):")
 
                 # استخراج الكود من الصفحة بعد نجاح العملية
                 try:
