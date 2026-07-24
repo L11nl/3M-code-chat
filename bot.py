@@ -24,41 +24,46 @@ HEADERS = {
 }
 
 async def get_fresh_cookies_with_stealth():
-    logging.info("جاري جلب الكوكيز بسرعة...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu"
-            ]
-        )
-        context = await browser.new_context(
-            user_agent=HEADERS["User-Agent"],
-            viewport={"width": 1920, "height": 1080}
-        )
-        page = await context.new_page()
-        
-        await page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
-        
-        try:
-            # استخدام domcontentloaded بدلاً من networkidle لعدم التعليق
+    logging.info("بدء عملية تشغيل المتصفح لجلب الكوكيز...")
+    try:
+        async with async_playwright() as p:
+            logging.info("جاري إطلاق متصفح النظام (Chromium)...")
+            browser = await p.chromium.launch(
+                executable_path="/usr/bin/chromium",  # استخدام متصفح النظام مباشرة لتفادي التعليق
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process"
+                ]
+            )
+            logging.info("تم إطلاق المتصفح بنجاح، جاري فتح الصفحة...")
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                viewport={"width": 1920, "height": 1080}
+            )
+            page = await context.new_page()
+            
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+            
             await page.goto(SITE_URL, timeout=30000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            logging.info("تم تحميل الصفحة، جاري انتظار توليد الكوكيز...")
+            await page.wait_for_timeout(4000)
+            
             cookies_list = await context.cookies()
             cookies_dict = {c['name']: c['value'] for c in cookies_list}
             await browser.close()
+            logging.info(f"تم الحصول على الكوكيز بنجاح! العدد: {len(cookies_dict)}")
             return cookies_dict
-        except Exception as e:
-            logging.error(f"خطأ في المتصفح: {e}")
-            await browser.close()
-            return None
+    except Exception as e:
+        logging.error(f"خطأ خطير أثناء تشغيل المتصفح: {e}")
+        return None
 
 def generate_random_email():
     chars = string.ascii_lowercase + string.digits
@@ -78,7 +83,7 @@ async def fetch_code(client, cookies):
     return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت جاهز ويعمل الآن بنظام الجلسات السريعة.\nأرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت يعمل الآن بكفاءة عالية وبدون تعليق.\nأرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -86,11 +91,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري معالجة طلب استخراج {count} كود...")
+    status_msg = await update.message.reply_text(f"⚡ جاري إعداد الجلسة الذكية واستخراج {count} كود...")
 
     cookies = await get_fresh_cookies_with_stealth()
     if not cookies:
-        await status_msg.edit_text("❌ تعذر الاتصال بالموقع، حاول مرة أخرى.")
+        await status_msg.edit_text("❌ تعذر الاتصال الأمني بالموقع أو جلب الكوكيز، حاول مرة أخرى.")
         return
 
     all_codes = []
