@@ -53,9 +53,8 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with async_playwright() as p:
             try:
-                # استخدام متصفح النظام المثبت في السيرفر مباشرة لتفادي مشاكل التحميل
+                # التشغيل الافتراضي السليم بناءً على الـ Dockerfile
                 browser = await p.chromium.launch(
-                    executable_path="/usr/bin/chromium",
                     headless=True,
                     args=[
                         "--no-sandbox",
@@ -66,7 +65,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]
                 )
             except Exception as e:
-                await status_msg.edit_text(f"❌ خطأ في تشغيل متصفح النظام: {e}")
+                await status_msg.edit_text(f"❌ خطأ في تشغيل المتصفح: {e}")
                 return
 
             context_browser = await browser.new_context(
@@ -84,7 +83,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await browser.close()
                 return
 
-            all_codes = []
             for i in range(count):
                 email = generate_random_email()
                 
@@ -98,7 +96,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(3000)
 
-                # التحقق من وجود الكابتشا
                 recaptcha_frame = None
                 for frame in page.frames:
                     if "recaptcha" in frame.url:
