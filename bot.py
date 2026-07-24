@@ -4,6 +4,7 @@ import string
 import asyncio
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
@@ -23,11 +24,12 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 def get_captcha_keyboard():
+    """توليد لوحة أزرار متوافقة مع شبكة 4×4 (16 مربعاً)"""
     keyboard = []
-    for r in range(3):
+    for r in range(4):
         row = []
-        for c in range(3):
-            box_num = r * 3 + c + 1
+        for c in range(4):
+            box_num = r * 4 + c + 1
             status = "✅" if box_num in user_selected_boxes else "🟩"
             row.append(InlineKeyboardButton(f"{box_num} {status}", callback_data=f"box_{box_num}"))
         keyboard.append(row)
@@ -102,7 +104,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(3000)
 
-                # البحث عن إطار الكابتشا (reCAPTCHA anchor) والنقر على مربع "أنا لست روبوت"
+                # البحث عن إطار الكابتشا والنقر على مربع "أنا لست روبوت"
                 recaptcha_frame = None
                 for frame in page.frames:
                     if "anchor" in frame.url:
@@ -119,7 +121,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"فشل النقر التلقائي على المربع: {e}")
 
-                # فحص ما إذا ظهرت شبكة الصور (3x3) بعد النقر
+                # فحص ما إذا ظهرت شبكة الصور (التحدي)
                 bframe = None
                 for frame in page.frames:
                     if "bframe" in frame.url:
@@ -146,7 +148,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_photo(
                             chat_id=chat_id,
                             photo=photo,
-                            caption="🔍 حدد المربعات المطلوبة من الشبكة أدناه واضغط 'إرسال الحل':",
+                            caption="🔍 حدد المربعات المطلوبة من شبكة (4×4) أدناه واضغط 'إرسال الحل':",
                             reply_markup=get_captcha_keyboard()
                         )
 
@@ -187,14 +189,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_selected_boxes.remove(box_num)
         else:
             user_selected_boxes.add(box_num)
-        await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        try:
+            await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        except BadRequest:
+            pass
         
     elif data == "reset_boxes":
         user_selected_boxes.clear()
-        await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        try:
+            await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
+        except BadRequest:
+            pass
         
     elif data == "verify_solution":
-        await query.edit_message_text(text="✅ تم استلام اختياراتك، جاري تطبيقها في المتصفح...")
+        try:
+            await query.edit_message_text(text="✅ تم استلام اختياراتك، جاري تطبيقها في المتصفح...")
+        except BadRequest:
+            pass
         if captcha_future and not captcha_future.done():
             captcha_future.set_result(True)
 
