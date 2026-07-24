@@ -25,7 +25,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """إرسال صورة الكابتشا وتحديد عدد المربعات وخريطة دقيقة لـ Gemini"""
+    """تحليل بصري دقيق جداً لمنع خطأ تفويت الصور المطابقة في الكابتشا"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -37,11 +37,12 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
         grid_desc = "3x3 grid (9 tiles total: 1,2,3 top row; 4,5,6 middle row; 7,8,9 bottom row)" if total_tiles == 9 else f"{total_tiles} tiles grid row by row from top-left to bottom-right."
 
         prompt = (
-            f"You are an expert AI vision model at solving reCAPTCHA challenges. This image is a {grid_desc}. "
-            "Analyze the instruction text at the top very carefully (e.g. crosswalks, traffic lights, a fire hydrant, bicycles, etc.). "
-            "Examine each tile meticulously and select ONLY the tile numbers that genuinely contain the requested object. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [2, 5, 8]. "
-            "Do not include any extra text, markdown formatting, or explanations, just the list."
+            f"You are an expert AI vision model at solving Google reCAPTCHA challenges. This image is a {grid_desc}. "
+            "CRITICAL: Read the instruction text at the top very carefully (e.g., 'a fire hydrant', 'crosswalks', 'traffic lights'). "
+            "Examine every single tile meticulously. Look closely at the edges, corners, and background of each tile, as objects can be small or partially visible. "
+            "List ALL tiles that contain the requested object. Do not miss any matching tiles, because missing even one causes the captcha to fail with 'Please select all matching images'. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [1, 2, 7]. "
+            "Do not include any extra text, explanations, or markdown formatting, just the raw JSON list."
         )
 
         response = ai_client.models.generate_content(
@@ -158,7 +159,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"فشل النقر على مربع التحقق: {e}")
 
-                # نظام تفاعلي ذكي لمعالجة جولات الكابتشا المتعددة (مع دعم NEXT و VERIFY)
+                # حل كابتشا الصور بجولات متعددة مدعومة بدقة عالية واستقرار في النقرات
                 max_captcha_rounds = 10
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -179,7 +180,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break # تختفي الكابتشا إذا تم حلها بالكامل
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التقاطها وتحليلها...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري تحليلها بدقة...")
                     
                     screenshot_path = f"captcha_round_{round_num}.png"
                     try:
@@ -195,26 +196,25 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     with open(screenshot_path, "rb") as photo:
                         await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
 
-                    # حساب عدد المربعات بدقة ديناميكية
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
 
-                    # حل الكابتشا عبر Gemini
+                    # حل الكابتشا عبر Gemini بالتحليل الفائق
                     correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini الشامل للمربعات: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
                             if tiles and box_num <= len(tiles):
-                                await tiles[box_num - 1].click(force=True)
-                                await asyncio.sleep(0.3)
+                                await tiles[box_num - 1].click()
+                                await asyncio.sleep(0.5) # مهلة مستقرة لتسجيل النقر بصرياً وبرمجياً
                         
-                        await asyncio.sleep(0.8) # انتظار تفعيل الزر
+                        await asyncio.sleep(1.0)
 
-                        # دعم زر التحقق أو الانتقال (VERIFY أو NEXT أو الزر الرسمي)
+                        # الضغط المؤكد على زر التأكيد (VERIFY أو NEXT)
                         action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
                         if action_btn:
-                            await action_btn.click(force=True)
+                            await action_btn.click()
                             await page.wait_for_timeout(4000)
                     except Exception as e:
                         print(f"خطأ أثناء النقر الآلي على المربعات أو زر التأكيد: {e}")
