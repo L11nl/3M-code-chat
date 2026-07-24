@@ -24,8 +24,8 @@ def generate_random_email():
     chars = string.ascii_lowercase + string.digits
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
-async def solve_captcha_with_gemini(image_path: str) -> list:
-    """إرسال صورة الكابتشا (شبكة 4x4) إلى جمناي لتحليلها وإرجاع أرقام المربعات الصحيحة"""
+async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
+    """إرسال صورة الكابتشا وتحديد عدد المربعات ديناميكياً لـ Gemini"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -35,9 +35,9 @@ async def solve_captcha_with_gemini(image_path: str) -> list:
             image_bytes = f.read()
 
         prompt = (
-            "This is a 4x4 grid reCAPTCHA challenge image (16 squares total, numbered 1 to 16 row by row from top-left to bottom-right). "
-            "Analyze the instruction text at the top, and identify which tile numbers contain the requested objects. "
-            "Return ONLY a valid JSON list of integers representing the correct tile numbers, for example: [5, 6, 9]. "
+            f"This is a reCAPTCHA challenge grid containing exactly {total_tiles} squares, numbered 1 to {total_tiles} row by row from top-left to bottom-right. "
+            "Analyze the instruction text at the top (e.g. crosswalks, fire hydrants, etc.), and identify which tile numbers contain the requested objects. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [2, 5, 8]. "
             "Do not include any extra text, markdown formatting, or explanations, just the list."
         )
 
@@ -57,14 +57,14 @@ async def solve_captcha_with_gemini(image_path: str) -> list:
         end = text_res.rfind("]") + 1
         if start != -1 and end != -1:
             tiles = json.loads(text_res[start:end])
-            return [int(t) for t in tiles if 1 <= t <= 16]
+            return [int(t) for t in tiles if 1 <= t <= total_tiles]
     except Exception as e:
         logging.error(f"خطأ أثناء حل الكابتشا بواسطة جمناي: {e}")
     
     return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت الذكي جاهز ويلتقط صور لكل خطوة. أرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت الذكي المتطور جاهز. أرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -98,7 +98,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             page = await context_browser.new_page()
 
-            # التقاط صورة لفتح الموقع
+            # الخطوة 1: فتح الموقع
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
@@ -137,7 +137,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 shot2 = "step_2_submitted.png"
                 await page.screenshot(path=shot2)
                 with open(shot2, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2: إدخال الإيميل ({email}) وإرسال الطلب.")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل ({email}) وإرسال الطلب.")
 
                 # النقر على مربع "أنا لست روبوت" إذا ظهر
                 recaptcha_frame = None
@@ -155,60 +155,64 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"فشل النقر على مربع التحقق: {e}")
 
-                # فحص ظهور شبكة الصور (التحدي 4x4)
-                bframe = None
-                for frame in page.frames:
-                    if "bframe" in frame.url:
-                        bframe = frame
-                        break
+                # نظام تفاعلي ذكي لمعالجة جولات الكابتشا المتعددة (في حال ظهور صور جديدة)
+                max_captcha_rounds = 5
+                for round_num in range(max_captcha_rounds):
+                    bframe = None
+                    for frame in page.frames:
+                        if "bframe" in frame.url:
+                            bframe = frame
+                            break
 
-                if bframe and await bframe.query_selector(".rc-imageselect-payload"):
-                    await context.bot.send_message(chat_id=chat_id, text="🤖 ظهرت كابتشا الصور، جاري التقاطها وإرسالها لـ Gemini...")
-                    
-                    screenshot_path = "captcha.png"
-                    try:
-                        captcha_element = await page.query_selector("iframe[src*='bframe']")
-                        if captcha_element:
-                            await captcha_element.screenshot(path=screenshot_path)
-                        else:
+                    if bframe and await bframe.query_selector(".rc-imageselect-payload"):
+                        await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التقاطها وتحليلها...")
+                        
+                        screenshot_path = f"captcha_round_{round_num}.png"
+                        try:
+                            captcha_element = await page.query_selector("iframe[src*='bframe']")
+                            if captcha_element:
+                                await captcha_element.screenshot(path=screenshot_path)
+                            else:
+                                await page.screenshot(path=screenshot_path)
+                        except Exception:
                             await page.screenshot(path=screenshot_path)
-                    except Exception:
-                        await page.screenshot(path=screenshot_path)
 
-                    # إرسال صورة الكابتشا للمستخدم ليرى ما رآه البوت
-                    with open(screenshot_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="🔍 صورة الكابتشا الحالية:")
+                        # إرسال صورة الكابتشا للمستخدم
+                        with open(screenshot_path, "rb") as photo:
+                            await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
 
-                    # استدعاء جمناي لحل الكابتشا
-                    correct_boxes = await solve_captcha_with_gemini(screenshot_path)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                        # حساب عدد المربعات بدقة ديناميكية (سواء كانت 9 أو 16 أو غيرها)
+                        tiles = await bframe.query_selector_all(".rc-imageselect-tile")
+                        total_tiles = len(tiles) if tiles else 9 # الافتراضي 9 في حال التعذر
 
-                    try:
-                        for f in page.frames:
-                            if "bframe" in f.url:
-                                tiles = await f.query_selector_all(".rc-imageselect-tile")
-                                for box_num in correct_boxes:
-                                    if tiles and box_num <= len(tiles):
-                                        await tiles[box_num - 1].click(force=True)
-                                        await asyncio.sleep(0.4)
-                                
-                                verify_btn = await f.query_selector("#recaptcha-verify-button")
-                                if verify_btn:
-                                    await verify_btn.click(force=True)
-                                    await page.wait_for_timeout(4000)
-                    except Exception as e:
-                        print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
+                        # حل الكابتشا عبر Gemini
+                        correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
+                        await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+
+                        try:
+                            for box_num in correct_boxes:
+                                if tiles and box_num <= len(tiles):
+                                    await tiles[box_num - 1].click(force=True)
+                                    await asyncio.sleep(0.4)
+                            
+                            verify_btn = await bframe.query_selector("#recaptcha-verify-button")
+                            if verify_btn:
+                                await verify_btn.click(force=True)
+                                await page.wait_for_timeout(4000)
+                        except Exception as e:
+                            print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
+                    else:
+                        break # تختفي الكابتشا إذا تم حلها بالكامل
 
                 # التقاط صورة للنتيجة بعد إتمام الطلب أو الحل
-                shot3 = "step_3_result.png"
+                shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3)
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1}:")
 
-                # محاولة التقاط الكود من الصفحة إن ظهر (مثال: بحث عن روابط أو أكواد ناتجة)
+                # محاولة استخراج الكود من الصفحة
                 try:
                     content = await page.content()
-                    # استخراج الكود إن وُجد في الصفحة
                     import re
                     found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
                     for link in found_links:
