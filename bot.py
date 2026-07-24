@@ -4,35 +4,40 @@ import string
 import asyncio
 import os
 import json
+import base64
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 TOKEN = os.getenv("TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
 
-ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# تهيئة عميل OpenRouter المتوافق مع معايير OpenAI
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+) if OPENROUTER_API_KEY else None
 
 def generate_random_email():
     chars = string.ascii_lowercase + string.digits
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
-async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل بصري دقيق جداً لصور الكابتشا المقصوصة بوضوح تام"""
-    if not ai_client:
-        logging.error("مفتاح جمناي غير متوفر!")
+async def solve_captcha_with_openrouter(image_path: str, total_tiles: int) -> list:
+    """تحليل بصري فائق الدقة لصور الكابتشا عبر OpenRouter Vision"""
+    if not client:
+        logging.error("مفتاح OpenRouter غير متوفر!")
         return []
     
     try:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
 
         grid_desc = "3x3 grid (9 tiles total: 1,2,3 top row; 4,5,6 middle row; 7,8,9 bottom row)" if total_tiles == 9 else f"{total_tiles} tiles grid row by row from top-left to bottom-right."
 
@@ -48,15 +53,26 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
             "Do not include any extra text, explanations, or markdown formatting, just the raw JSON list."
         )
 
-        response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt
-            ],
+        # استخدام نموذج رؤية قوي وممتاز متوفر على OpenRouter
+        completion = client.chat.completions.create(
+            model="google/gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ]
         )
         
-        text_res = response.text.strip()
+        text_res = completion.choices[0].message.content.strip()
         if "```" in text_res:
             text_res = text_res.replace("```json", "").replace("```", "").strip()
             
@@ -66,15 +82,15 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
             tiles = json.loads(text_res[start:end])
             return [int(t) for t in tiles if 1 <= t <= total_tiles]
     except Exception as e:
-        logging.error(f"خطأ أثناء حل الكابتشا بواسطة جمناي: {e}")
+        logging.error(f"خطأ أثناء حل الكابتشا بواسطة OpenRouter: {e}")
     
     return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
+    keyboard = [[KeyboardButton("فحص مفتاح OpenRouter")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي المتطور جاهز.\nاختر 'فحص مفتاح الAi' للتأكد من عمله، أو أرسل عدد الأكواد المطلوبة:",
+        "🚀 البوت الذكي المتطور (مدعوم بـ OpenRouter) جاهز.\nاختر 'فحص مفتاح OpenRouter' للتأكد من عمله، أو أرسل عدد الأكواد المطلوبة:",
         reply_markup=reply_markup
     )
 
@@ -82,34 +98,34 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
 
-    # زر فحص مفتاح الـ AI
-    if text == "فحص مفتاح الAi":
-        if not GEMINI_API_KEY:
-            await update.message.reply_text("❌ متغير البيئة GEMINI_API_KEY غير موجود في Railway أو غير مُعرف.")
+    if text == "فحص مفتاح OpenRouter":
+        if not OPENROUTER_API_KEY:
+            await update.message.reply_text("❌ متغير البيئة OPENROUTER_API_KEY غير موجود في منصة الاستضافة.")
             return
-        if not ai_client:
-            await update.message.reply_text("❌ فشل تهيئة عميل Gemini.")
+        if not client:
+            await update.message.reply_text("❌ فشل تهيئة عميل OpenRouter.")
             return
         
-        checking_msg = await update.message.reply_text("🔍 جاري فحص الاتصال بمفتاح جمناي...")
+        checking_msg = await update.message.reply_text("🔍 جاري فحص الاتصال بمفتاح OpenRouter...")
         try:
-            response = ai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents="Say 'CONNECTED'",
+            response = client.chat.completions.create(
+                model="google/gemini-2.5-flash",
+                messages=[{"role": "user", "content": "Say 'CONNECTED'"}]
             )
-            if response and response.text:
-                await checking_msg.edit_text(f"✅ مفتاح الـ AI يعمل بكفاءة ومتصل بنجاح!\nرد النموذج التجريبي: {response.text.strip()}")
+            reply_text = response.choices[0].message.content.strip()
+            if reply_text:
+                await checking_msg.edit_text(f"✅ مفتاح OpenRouter يعمل بكفاءة ومتصل بنجاح!\nرد النموذج التجريبي: {reply_text}")
             else:
                 await checking_msg.edit_text("⚠️ المفتاح متصل ولكن لم يتم استلام رد صحيح من النموذج.")
         except Exception as e:
-            await checking_msg.edit_text(f"❌ فشل الاتصال بمفتاح الـ AI:\n{e}")
+            await checking_msg.edit_text(f"❌ فشل الاتصال بمفتاح OpenRouter:\n{e}")
         return
 
     if not text.isdigit():
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود بالذكاء الاصطناعي...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود عبر OpenRouter...")
 
     try:
         async with async_playwright() as p:
@@ -134,7 +150,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             page = await context_browser.new_page()
 
-            # الخطوة 1: فتح الموقع
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
@@ -169,13 +184,11 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(3000)
 
-                # التقاط صورة بعد محاولة الإرسال
                 shot2 = "step_2_submitted.png"
                 await page.screenshot(path=shot2, full_page=True)
                 with open(shot2, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل وإرسال الطلب.")
 
-                # النقر على مربع "أنا لست روبوت" (مرة واحدة فقط في البداية)
                 try:
                     recaptcha_frame = None
                     for frame in page.frames:
@@ -191,7 +204,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود: {e}")
 
-                # حلقة حل صور الكابتشا مع التقاط دقيق وعرض المربعات المختارة
                 max_captcha_rounds = 10
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -210,35 +222,35 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
 
                     if not is_captcha_active:
-                        break # تختفي الكابتشا إذا تم حلها بنجاح
+                        break
 
                     await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التحليل...")
                     
                     captcha_element = await page.query_selector("iframe[src*='bframe']")
-                    gemini_img_path = f"captcha_crop_{round_num}.png"
+                    openrouter_img_path = f"captcha_crop_{round_num}.png"
                     
                     if captcha_element:
                         box = await captcha_element.bounding_box()
                         if box:
-                            await page.screenshot(path=gemini_img_path, clip={
+                            await page.screenshot(path=openrouter_img_path, clip={
                                 'x': box['x'],
                                 'y': box['y'],
                                 'width': box['width'],
                                 'height': box['height']
                             })
                         else:
-                            await captcha_element.screenshot(path=gemini_img_path)
+                            await captcha_element.screenshot(path=openrouter_img_path)
                     else:
-                        await page.screenshot(path=gemini_img_path)
+                        await page.screenshot(path=openrouter_img_path)
 
-                    with open(gemini_img_path, "rb") as photo:
+                    with open(openrouter_img_path, "rb") as photo:
                         await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا المطلوبة (الجولة {round_num + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
 
-                    correct_boxes = await solve_captcha_with_gemini(gemini_img_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                    correct_boxes = await solve_captcha_with_openrouter(openrouter_img_path, total_tiles)
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل OpenRouter للمربعات: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
