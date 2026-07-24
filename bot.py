@@ -25,7 +25,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل بصري دقيق جداً لمنع خطأ تفويت الصور المطابقة في الكابتشا"""
+    """تحليل بصري دقيق عبر Gemini للصور غير المقصوصة"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -38,10 +38,10 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
 
         prompt = (
             f"You are an expert AI vision model at solving Google reCAPTCHA challenges. This image is a {grid_desc}. "
-            "CRITICAL: Read the instruction text at the top very carefully (e.g., 'a fire hydrant', 'crosswalks', 'traffic lights'). "
+            "CRITICAL: Read the instruction text at the top very carefully (e.g., 'a bus', 'a fire hydrant', 'crosswalks', 'traffic lights'). "
             "Examine every single tile meticulously. Look closely at the edges, corners, and background of each tile, as objects can be small or partially visible. "
-            "List ALL tiles that contain the requested object. Do not miss any matching tiles, because missing even one causes the captcha to fail with 'Please select all matching images'. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [1, 2, 7]. "
+            "List ALL tiles that contain the requested object to avoid failure. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [5, 8]. "
             "Do not include any extra text, explanations, or markdown formatting, just the raw JSON list."
         )
 
@@ -108,7 +108,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await page.wait_for_timeout(3000)
                 
                 shot1 = "step_1_open.png"
-                await page.screenshot(path=shot1)
+                await page.screenshot(path=shot1, full_page=True)
                 with open(shot1, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="🌐 الخطوة 1: تم فتح الموقع بنجاح.")
             except Exception as e:
@@ -137,29 +137,29 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(3000)
 
-                # التقاط صورة بعد محاولة الإرسال
+                # التقاط صورة بعد محاولة الإرسال (كاملة غير مقصوصة)
                 shot2 = "step_2_submitted.png"
-                await page.screenshot(path=shot2)
+                await page.screenshot(path=shot2, full_page=True)
                 with open(shot2, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل ({email}) وإرسال الطلب.")
 
-                # النقر على مربع "أنا لست روبوت" إذا ظهر
-                recaptcha_frame = None
-                for frame in page.frames:
-                    if "anchor" in frame.url:
-                        recaptcha_frame = frame
-                        break
+                # النقر على مربع "أنا لست روبوت" (مرة واحدة فقط في البداية وبشكل منفصل تماماً)
+                try:
+                    recaptcha_frame = None
+                    for frame in page.frames:
+                        if "anchor" in frame.url:
+                            recaptcha_frame = frame
+                            break
 
-                if recaptcha_frame:
-                    try:
-                        checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=5000)
+                    if recaptcha_frame:
+                        checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=4000)
                         if checkbox:
                             await checkbox.click()
                             await page.wait_for_timeout(3000)
-                    except Exception as e:
-                        print(f"فشل النقر على مربع التحقق: {e}")
+                except Exception as e:
+                    print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
 
-                # حل كابتشا الصور بجولات متعددة مدعومة بدقة عالية واستقرار في النقرات
+                # حلقة حل صور الكابتشا (منفصلة تماماً عن المربع الصغير لعدم تداخل النقر)
                 max_captcha_rounds = 10
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -180,52 +180,46 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break # تختفي الكابتشا إذا تم حلها بالكامل
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري تحليلها بدقة...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري تحليلها...")
                     
+                    # التقاط صورة كاملة وغير مقصوصة لصفحة الكابتشا
                     screenshot_path = f"captcha_round_{round_num}.png"
-                    try:
-                        captcha_element = await page.query_selector("iframe[src*='bframe']")
-                        if captcha_element:
-                            await captcha_element.screenshot(path=screenshot_path)
-                        else:
-                            await page.screenshot(path=screenshot_path)
-                    except Exception:
-                        await page.screenshot(path=screenshot_path)
+                    await page.screenshot(path=screenshot_path, full_page=True)
 
-                    # إرسال صورة الكابتشا للمستخدم
+                    # إرسال الصورة الكاملة للمستخدم
                     with open(screenshot_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا كاملة (الجولة {round_num + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
 
-                    # حل الكابتشا عبر Gemini بالتحليل الفائق
+                    # حل الكابتشا عبر Gemini بدقة فائقة
                     correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini الشامل للمربعات: {correct_boxes}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
                             if tiles and box_num <= len(tiles):
                                 await tiles[box_num - 1].click()
-                                await asyncio.sleep(0.5) # مهلة مستقرة لتسجيل النقر بصرياً وبرمجياً
+                                await asyncio.sleep(0.4)
                         
                         await asyncio.sleep(1.0)
 
-                        # الضغط المؤكد على زر التأكيد (VERIFY أو NEXT)
+                        # النقر على زر التحقق أو التالي (VERIFY / NEXT) حصرياً داخل إطار الكابتشا
                         action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
                         if action_btn:
                             await action_btn.click()
                             await page.wait_for_timeout(4000)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر الآلي على المربعات أو زر التأكيد: {e}")
+                        print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
 
-                # التقاط صورة للنتيجة بعد إتمام الطلب أو الحل
+                # التقاط صورة للنتيجة بعد إتمام الطلب أو الحل (كاملة وغير مقصوصة)
                 shot3 = f"step_3_result_{i+1}.png"
-                await page.screenshot(path=shot3)
+                await page.screenshot(path=shot3, full_page=True)
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1}:")
 
-                # سحب الكود كاملاً من الذاكرة البرمجية للحقول (يتجاوز مشكلة تغطية الكابتشا بصرياً)
+                # سحب الكود كاملاً من الذاكرة البرمجية للحقول متجاوزاً أي تغطية بصرية
                 try:
                     extracted_values = await page.evaluate("""() => {
                         const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
