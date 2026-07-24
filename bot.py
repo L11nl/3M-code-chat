@@ -39,7 +39,7 @@ def get_captcha_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت جاهز. أرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت جاهز ويقوم بالتقاط الصور لكل خطوة. أرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global captcha_future, current_page
@@ -48,12 +48,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء عملية استخراج {count} كود...")
+    chat_id = update.effective_chat.id
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل والتقاط الصور لكل خطوة...")
 
     try:
         async with async_playwright() as p:
             try:
-                # التشغيل الافتراضي السليم بناءً على الـ Dockerfile
                 browser = await p.chromium.launch(
                     headless=True,
                     args=[
@@ -77,7 +77,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(3000)
+                
+                # التقاط صورة لفتح الصفحة بنجاح
+                shot_path = "step_open.png"
+                await page.screenshot(path=shot_path)
+                with open(shot_path, "rb") as photo:
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="🌐 الخطوة 1: تم فتح الموقع بنجاح.")
             except Exception as e:
                 await status_msg.edit_text(f"❌ خطأ أثناء فتح الموقع: {e}")
                 await browser.close()
@@ -89,12 +95,24 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 email_input = await page.query_selector("input[name='email'], input[type='email']")
                 if email_input:
                     await email_input.fill(email)
+                    await page.evaluate("""el => {
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""", email_input)
+
+                await page.wait_for_timeout(1000)
 
                 submit_btn = await page.query_selector("button[type='submit'], input[type='submit']")
                 if submit_btn:
-                    await submit_btn.click()
+                    await submit_btn.click(force=True)
 
                 await page.wait_for_timeout(3000)
+
+                # التقاط صورة بعد محاولة إرسال الإيميل
+                shot_path2 = "step_submit.png"
+                await page.screenshot(path=shot_path2)
+                with open(shot_path2, "rb") as photo:
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2: تم إدخال الإيميل ({email}) وإرسال الطلب.")
 
                 recaptcha_frame = None
                 for frame in page.frames:
@@ -103,7 +121,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         break
 
                 if recaptcha_frame or await page.query_selector("iframe[src*='recaptcha']"):
-                    await status_msg.edit_text("⚠️ ظهرت الكابتشا! جاري التقاط الصورة...")
+                    await context.bot.send_message(chat_id=chat_id, text="⚠️ ظهرت صفحة التحقق (الكابتشا)! جاري إرسال صورتها...")
                     
                     screenshot_path = "captcha.png"
                     try:
@@ -120,9 +138,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     with open(screenshot_path, "rb") as photo:
                         await context.bot.send_photo(
-                            chat_id=update.effective_chat.id,
+                            chat_id=chat_id,
                             photo=photo,
-                            caption="🔍 يرجى تحديد المربعات المطلوبة من الشبكة أدناه واضغط 'إرسال الحل':",
+                            caption="🔍 حدد المربعات المطلوبة من الشبكة أدناه واضغط 'إرسال الحل':",
                             reply_markup=get_captcha_keyboard()
                         )
 
@@ -135,18 +153,24 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 for box_num in user_selected_boxes:
                                     tiles = await f.query_selector_all(".rc-imageselect-tile")
                                     if tiles and box_num <= len(tiles):
-                                        await tiles[box_num - 1].click()
+                                        await tiles[box_num - 1].click(force=True)
                                         await asyncio.sleep(0.5)
                                 verify_btn = await f.query_selector("#recaptcha-verify-button")
                                 if verify_btn:
-                                    await verify_btn.click()
+                                    await verify_btn.click(force=True)
                                     await asyncio.sleep(3)
                     except Exception as e:
                         print(f"خطأ أثناء النقر على المربعات: {e}")
 
+                # التقاط صورة لنتيجة الصفحة بعد الطلب
+                shot_path3 = "step_result.png"
+                await page.screenshot(path=shot_path3)
+                with open(shot_path3, "rb") as photo:
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption="🎯 نتيجة تنفيذ الطلب الحالي:")
+
                 await asyncio.sleep(2)
                 
-            await status_msg.edit_text(f"✅ تمت العملية بنجاح!")
+            await status_msg.edit_text(f"✅ تمت العملية بالكامل بنجاح!")
             await browser.close()
             
     except Exception as e:
