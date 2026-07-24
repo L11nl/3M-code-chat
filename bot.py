@@ -4,6 +4,7 @@ import string
 import asyncio
 import os
 import json
+import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
@@ -25,7 +26,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """إرسال صورة الكابتشا وتحديد عدد المربعات ديناميكياً لـ Gemini"""
+    """تحليل دقيق وعالي الدقة للكابتشا عبر Gemini"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -35,10 +36,12 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
             image_bytes = f.read()
 
         prompt = (
-            f"This is a reCAPTCHA challenge grid containing exactly {total_tiles} squares, numbered 1 to {total_tiles} row by row from top-left to bottom-right. "
-            "Analyze the instruction text at the top (e.g. crosswalks, fire hydrants, etc.), and identify which tile numbers contain the requested objects. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers between 1 and {total_tiles}, for example: [2, 5, 8]. "
-            "Do not include any extra text, markdown formatting, or explanations, just the list."
+            f"You are an expert AI at solving reCAPTCHA challenges. This image contains a grid of exactly {total_tiles} squares, "
+            f"numbered sequentially from 1 to {total_tiles} row by row, starting from top-left (1) to bottom-right ({total_tiles}). "
+            "Read the target object specified in the instruction text at the top very carefully. "
+            "Identify every single tile that contains any part of the requested object. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [3, 7, 11]). "
+            "Do not include any explanations, markdown, or extra text, just the raw JSON list."
         )
 
         response = ai_client.models.generate_content(
@@ -127,7 +130,8 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(1000)
 
-                submit_btn = await page.query_selector("button[type='submit'], input[type='submit']")
+                # الضغط على زر "Obtener código" أو زر الإرسال الرئيسي
+                submit_btn = await page.query_selector("button[type='submit'], input[type='submit'], button:has-text('Obtener código')")
                 if submit_btn:
                     await submit_btn.click(force=True)
 
@@ -137,7 +141,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 shot2 = "step_2_submitted.png"
                 await page.screenshot(path=shot2)
                 with open(shot2, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل ({email}) وإرسال الطلب.")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل ({email}) والنقر على زر الطلب.")
 
                 # النقر على مربع "أنا لست روبوت" إذا ظهر
                 recaptcha_frame = None
@@ -155,7 +159,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"فشل النقر على مربع التحقق: {e}")
 
-                # نظام تفاعلي ذكي لمعالجة جولات الكابتشا المتعددة (في حال ظهور صور جديدة)
+                # نظام تفاعلي ذكي لمعالجة جولات الكابتشا المتعددة
                 max_captcha_rounds = 5
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -165,7 +169,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             break
 
                     if bframe and await bframe.query_selector(".rc-imageselect-payload"):
-                        await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التقاطها وتحليلها...")
+                        await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التقاطها وتحليلها بدقة...")
                         
                         screenshot_path = f"captcha_round_{round_num}.png"
                         try:
@@ -181,9 +185,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         with open(screenshot_path, "rb") as photo:
                             await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
 
-                        # حساب عدد المربعات بدقة ديناميكية (سواء كانت 9 أو 16 أو غيرها)
+                        # حساب عدد المربعات بدقة ديناميكية
                         tiles = await bframe.query_selector_all(".rc-imageselect-tile")
-                        total_tiles = len(tiles) if tiles else 9 # الافتراضي 9 في حال التعذر
+                        total_tiles = len(tiles) if tiles else 9
 
                         # حل الكابتشا عبر Gemini
                         correct_boxes = await solve_captcha_with_gemini(screenshot_path, total_tiles)
@@ -204,16 +208,24 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         break # تختفي الكابتشا إذا تم حلها بالكامل
 
-                # التقاط صورة للنتيجة بعد إتمام الطلب أو الحل
+                # بعد حل الكابتشا، التأكد من النقر على زر "Obtener código" لإتمام الطلب وجلب النتيجة
+                try:
+                    obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
+                    if obtener_btn:
+                        await obtener_btn.click(force=True)
+                        await page.wait_for_timeout(4000)
+                except Exception as e:
+                    print(f"خطأ أثناء النقر النهائي على زر الحصول على الكود: {e}")
+
+                # التقاط صورة للنتيجة بعد إتمام الطلب
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3)
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1}:")
 
-                # محاولة استخراج الكود من الصفحة
+                # استخراج الكود من الصفحة بعد نجاح العملية
                 try:
                     content = await page.content()
-                    import re
                     found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
                     for link in found_links:
                         if "openai" in link or "code" in link or "bbva" in link:
