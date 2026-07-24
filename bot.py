@@ -201,12 +201,19 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 await tiles[box_num - 1].click(force=True)
                                 await asyncio.sleep(0.3)
                         
-                        action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
+                        # تأخير زمني بسيط لضمان تفعيل زر التأكيد (NEXT أو VERIFY) بعد النقر على المربعات
+                        await asyncio.sleep(1.0)
+
+                        # النقر بشكل مؤكد على زر التأكيد (سواء كان NEXT أو VERIFY)
+                        action_btn = await bframe.query_selector("#recaptcha-verify-button")
+                        if not action_btn:
+                            action_btn = await bframe.query_selector("button:has-text('VERIFY'), button:has-text('NEXT'), #recaptcha-verify-button")
+                        
                         if action_btn:
                             await action_btn.click(force=True)
                             await page.wait_for_timeout(4000)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر على المربعات: {e}")
+                        print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
 
                 # بعد اختفاء الكابتشا تماماً، النقر فوراً على زر "Obtener código" لجلب النتيجة
                 await page.wait_for_timeout(1500)
@@ -224,7 +231,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية للطلب رقم {i+1}:")
 
-                # حل جذري لاستخراج الكود مباشرة من الذاكرة البرمجية للحقول (حتى لو كانت مخفية بصرياً تحت الكابتشا)
+                # استخراج الكود مباشرة من الذاكرة البرمجية للحقول لتجاوز أي تغطية بصرية
                 try:
                     extracted_values = await page.evaluate("""() => {
                         const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
