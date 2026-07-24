@@ -3,55 +3,80 @@ import random
 import string
 import asyncio
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
+from google import genai
+from google.genai import types
 
 TOKEN = os.getenv("TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
 
-user_selected_boxes = set()
-captcha_future = None
-current_page = None
+# تهيئة عميل جمناي
+ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 def generate_random_email():
     chars = string.ascii_lowercase + string.digits
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
-def get_captcha_keyboard():
-    """توليد لوحة أزرار متوافقة مع شبكة 4×4 (16 مربعاً)"""
-    keyboard = []
-    for r in range(4):
-        row = []
-        for c in range(4):
-            box_num = r * 4 + c + 1
-            status = "✅" if box_num in user_selected_boxes else "🟩"
-            row.append(InlineKeyboardButton(f"{box_num} {status}", callback_data=f"box_{box_num}"))
-        keyboard.append(row)
+async def solve_captcha_with_gemini(image_path: str) -> list:
+    """إرسال صورة الكابتشا إلى جمناي لتحليلها وإرجاع أقم المربعات الصحيحة"""
+    if not ai_client:
+        logging.error("مفتاح جمناي غير متوفر!")
+        return []
     
-    keyboard.append([
-        InlineKeyboardButton("🔄 إعادة ضبط", callback_data="reset_boxes"),
-        InlineKeyboardButton("🚀 إرسال الحل والتنفيذ", callback_data="verify_solution")
-    ])
-    return InlineKeyboardMarkup(keyboard)
+    try:
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        prompt = (
+            "This is a 4x4 grid reCAPTCHA challenge image (16 squares total, numbered 1 to 16 row by row from top-left to bottom-right). "
+            "Analyze the instruction text at the top, and identify which tile numbers contain the requested objects. "
+            "Return ONLY a Python list of integers representing the correct tile numbers, for example: [5, 6, 9]. "
+            "If none contain the object, return []."
+        )
+
+        response = ai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type="image/png",
+                ),
+                prompt
+            ],
+        )
+        
+        # استخراج الأرقام من إجابة الذكاء الاصطناعي بأمان
+        import json
+        text_res = response.text.strip()
+        # محاولة استخراج الأستركشر كقائمة بايثون
+        if "[" in text_res and "]" in text_res:
+            start = text_res.find("[")
+            end = text_res.rfind("]") + 1
+            tiles = json.loads(text_res[start:end])
+            return [int(t) for t in tiles if 1 <= t <= 16]
+    except Exception as e:
+        logging.error(f"خطأ أثناء حل الكابتشا بواسطة جمناي: {e}")
+    
+    return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت جاهز. أرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت الذكي يعمل الآن (مدعوم بالذكاء الاصطناعي لحل الكابتشا تلقائياً).\nأرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global captcha_future, current_page
     text = update.message.text.strip()
     if not text.isdigit():
         return
 
     count = int(text)
     chat_id = update.effective_chat.id
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل والنقر على الكابتشا تلقائياً...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج الأكواد بالذكاء الاصطناعي...")
 
     try:
         async with async_playwright() as p:
@@ -75,7 +100,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 viewport={"width": 1280, "height": 800}
             )
             page = await context_browser.new_page()
-            current_page = page
 
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
@@ -104,7 +128,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await page.wait_for_timeout(3000)
 
-                # البحث عن إطار الكابتشا والنقر على مربع "أنا لست روبوت"
+                # النقر على مربع "أنا لست روبوت"
                 recaptcha_frame = None
                 for frame in page.frames:
                     if "anchor" in frame.url:
@@ -112,16 +136,15 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         break
 
                 if recaptcha_frame:
-                    await status_msg.edit_text("🤖 تم اكتشاف مربع التحقق، جاري النقر عليه تلقائياً...")
                     try:
                         checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=5000)
                         if checkbox:
                             await checkbox.click()
                             await page.wait_for_timeout(3000)
                     except Exception as e:
-                        print(f"فشل النقر التلقائي على المربع: {e}")
+                        print(f"فشل النقر على مربع التحقق: {e}")
 
-                # فحص ما إذا ظهرت شبكة الصور (التحدي)
+                # فحص ظهور شبكة الصور (التحدي 4x4)
                 bframe = None
                 for frame in page.frames:
                     if "bframe" in frame.url:
@@ -129,7 +152,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         break
 
                 if bframe and await bframe.query_selector(".rc-imageselect-payload"):
-                    await status_msg.edit_text("⚠️ ظهرت صور التحقق (التحدي)! جاري التقاط الصورة...")
+                    await status_msg.edit_text("🤖 ظهرت الكابتشا، جاري إرسالها لـ Gemini للحل التلقائي...")
                     
                     screenshot_path = "captcha.png"
                     try:
@@ -141,73 +164,33 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         await page.screenshot(path=screenshot_path)
 
-                    user_selected_boxes.clear()
-                    captcha_future = asyncio.get_running_loop().create_future()
-
-                    with open(screenshot_path, "rb") as photo:
-                        await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=photo,
-                            caption="🔍 حدد المربعات المطلوبة من شبكة (4×4) أدناه واضغط 'إرسال الحل':",
-                            reply_markup=get_captcha_keyboard()
-                        )
-
-                    await captcha_future
+                    # استدعاء جمناي لتحليل الصورة والحصول على أرقام المربعات
+                    correct_boxes = await solve_captcha_with_gemini(screenshot_path)
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 تم تحليل الكابتشا بواسطة Gemini. المربعات المختارة: {correct_boxes}")
 
                     try:
                         for f in page.frames:
                             if "bframe" in f.url:
-                                for box_num in user_selected_boxes:
-                                    tiles = await f.query_selector_all(".rc-imageselect-tile")
+                                tiles = await f.query_selector_all(".rc-imageselect-tile")
+                                for box_num in correct_boxes:
                                     if tiles and box_num <= len(tiles):
                                         await tiles[box_num - 1].click(force=True)
-                                        await asyncio.sleep(0.5)
+                                        await asyncio.sleep(0.4)
+                                
                                 verify_btn = await f.query_selector("#recaptcha-verify-button")
                                 if verify_btn:
                                     await verify_btn.click(force=True)
                                     await asyncio.sleep(3)
                     except Exception as e:
-                        print(f"خطأ أثناء النقر على المربعات: {e}")
+                        print(f"خطأ أثناء النقر الآلي على المربعات: {e}")
 
                 await asyncio.sleep(2)
                 
-            await status_msg.edit_text(f"✅ تمت العملية بالكامل بنجاح!")
+            await status_msg.edit_text(f"✅ تمت عملية استخراج الأكواد بالذكاء الاصطناعي بنجاح!")
             await browser.close()
             
     except Exception as e:
         await status_msg.edit_text(f"❌ حدث خطأ غير متوقع: {e}")
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global captcha_future
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    
-    if data.startswith("box_"):
-        box_num = int(data.split("_")[1])
-        if box_num in user_selected_boxes:
-            user_selected_boxes.remove(box_num)
-        else:
-            user_selected_boxes.add(box_num)
-        try:
-            await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
-        except BadRequest:
-            pass
-        
-    elif data == "reset_boxes":
-        user_selected_boxes.clear()
-        try:
-            await query.edit_message_reply_markup(reply_markup=get_captcha_keyboard())
-        except BadRequest:
-            pass
-        
-    elif data == "verify_solution":
-        try:
-            await query.edit_message_text(text="✅ تم استلام اختياراتك، جاري تطبيقها في المتصفح...")
-        except BadRequest:
-            pass
-        if captcha_future and not captcha_future.done():
-            captcha_future.set_result(True)
 
 def main():
     if not TOKEN:
@@ -216,7 +199,6 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_request))
-    app.add_handler(CallbackQueryHandler(button_callback))
     app.run_polling()
 
 if __name__ == "__main__":
