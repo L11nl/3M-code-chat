@@ -14,7 +14,6 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
 
-# متغيرات عامة لحفظ حالة الانتظار والتفاعل
 user_selected_boxes = set()
 captcha_future = None
 current_page = None
@@ -51,37 +50,44 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = int(text)
     status_msg = await update.message.reply_text(f"⚡ جاري بدء عملية استخراج {count} كود...")
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            executable_path="/usr/bin/chromium",
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
-        context_browser = await browser.new_context(viewport={"width": 1280, "height": 800})
-        page = await context_browser.new_page()
-        current_page = page
+    try:
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                )
+            except Exception as e:
+                await status_msg.edit_text(f"❌ خطأ في تشغيل المتصفح: {e}")
+                return
 
-        try:
-            await page.goto(SITE_URL, timeout=40000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            context_browser = await browser.new_context(viewport={"width": 1280, "height": 800})
+            page = await context_browser.new_page()
+            current_page = page
+
+            try:
+                await page.goto(SITE_URL, timeout=40000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+            except Exception as e:
+                await status_msg.edit_text(f"❌ خطأ أثناء فتح الموقع: {e}")
+                await browser.close()
+                return
 
             all_codes = []
             for i in range(count):
                 email = generate_random_email()
                 
-                # تعبئة الإيميل
                 email_input = await page.query_selector("input[name='email'], input[type='email']")
                 if email_input:
                     await email_input.fill(email)
 
-                # الضغط على زر الطلب
                 submit_btn = await page.query_selector("button[type='submit'], input[type='submit']")
                 if submit_btn:
                     await submit_btn.click()
 
                 await page.wait_for_timeout(3000)
 
-                # التحقق مما إذا ظهرت الكابتشا (iframe الخاصة بـ reCAPTCHA)
+                # التحقق من وجود الكابتشا
                 recaptcha_frame = None
                 for frame in page.frames:
                     if "recaptcha" in frame.url:
@@ -91,10 +97,8 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if recaptcha_frame or await page.query_selector("iframe[src*='recaptcha']"):
                     await status_msg.edit_text("⚠️ ظهرت الكابتشا! جاري التقاط الصورة...")
                     
-                    # محاولة تحديد مربع الكابتشا وأخذ لقطة شاشة له
                     screenshot_path = "captcha.png"
                     try:
-                        # العثور على عنصر الكابتشا أو أخذ لقطة للشاشة كاملة إذا تعذر تحديد العنصر بدقة
                         captcha_element = await page.query_selector(".g-recaptcha, iframe[src*='recaptcha']")
                         if captcha_element:
                             await captcha_element.screenshot(path=screenshot_path)
@@ -106,31 +110,25 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_selected_boxes.clear()
                     captcha_future = asyncio.get_running_loop().create_future()
 
-                    # إرسال الصورة للمستخدم مع الأزرار 3×3
                     with open(screenshot_path, "rb") as photo:
-                        msg = await context.bot.send_photo(
+                        await context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=photo,
                             caption="🔍 يرجى تحديد المربعات المطلوبة من الشبكة أدناه واضغط 'إرسال الحل':",
                             reply_markup=get_captcha_keyboard()
                         )
 
-                    # انتظار قيام المستخدم بحل الكابتشا عبر الأزرار
                     await captcha_future
 
-                    # بعد حل المستخدم، نقوم بمحاولة النقر على المربعات داخل المتصفح
-                    # (ملاحظة: reCAPTCHA تتطلب النقر داخل الإطار البرمجي الخاص بها)
                     try:
                         frames = page.frames
                         for f in frames:
-                            if "bframe" in f.url: # إطار الصور الداخلي لـ reCAPTCHA
+                            if "bframe" in f.url:
                                 for box_num in user_selected_boxes:
-                                    # إيجاد المربعات التسعة داخل إطار الكابتشا والنقر عليها حسب الرقم
                                     tiles = await f.query_selector_all(".rc-imageselect-tile")
                                     if tiles and box_num <= len(tiles):
                                         await tiles[box_num - 1].click()
                                         await asyncio.sleep(0.5)
-                                # النقر على زر التحقق (Verify)
                                 verify_btn = await f.query_selector("#recaptcha-verify-button")
                                 if verify_btn:
                                     await verify_btn.click()
@@ -138,15 +136,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"خطأ أثناء النقر على المربعات: {e}")
 
-                # استخراج الكود إن وُجد في الصفحة
-                # (يمكن قراءة الرد أو استخراج النص من الحقل الناتج)
                 await asyncio.sleep(2)
                 
             await status_msg.edit_text(f"✅ تمت العملية بنجاح!")
-        except Exception as e:
-            await status_msg.edit_text(f"❌ حدث خطأ أثناء التنفيذ: {e}")
-        finally:
             await browser.close()
+            
+    except Exception as e:
+        await status_msg.edit_text(f"❌ حدث خطأ غير متوقع: {e}")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global captcha_future
