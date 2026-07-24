@@ -26,7 +26,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل بصري دقيق جداً لتجنب أخطاء تكرار الكابتشا"""
+    """إرسال صورة الكابتشا مع خريطة إحداثيات دقيقة جداً لـ Gemini لتفادي الأخطاء"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -35,14 +35,15 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
 
+        grid_desc = "3x3 grid (9 tiles total: 1,2,3 top row; 4,5,6 middle row; 7,8,9 bottom row)" if total_tiles == 9 else f"{total_tiles} tiles grid row by row."
+
         prompt = (
-            f"You are an elite AI vision model specialized in solving reCAPTCHA v2 image challenges. "
-            f"This image is a grid of exactly {total_tiles} tiles, numbered sequentially from 1 to {total_tiles} row by row (top-left to bottom-right). "
-            "Read the target object in the instruction text at the top very carefully (e.g., crosswalks, traffic lights, bicycles, etc.). "
-            "Be extremely thorough: select EVERY tile that contains even a small portion of the requested object. Do not miss any matching tiles, "
-            "as missing them causes the captcha to fail and repeat. "
-            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [2, 5, 6]). "
-            "Do not include any extra text, explanations, or markdown formatting."
+            f"You are an expert AI vision model at solving reCAPTCHA challenges. This image is a {grid_desc}. "
+            "Read the instruction text at the top very carefully (e.g., 'a fire hydrant', 'crosswalks', 'traffic lights'). "
+            "Examine each tile meticulously. Select ONLY the tile numbers that genuinely contain the requested object. "
+            "Do not guess or include tiles that do not clearly contain the object. "
+            f"Return ONLY a valid JSON list of integers representing the correct tile numbers (e.g., [4]). "
+            "Do not include any extra text, explanations, or markdown formatting, just the raw JSON list."
         )
 
         response = ai_client.models.generate_content(
@@ -154,7 +155,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود أو تم تجاوزه: {e}")
 
-                # حل كابتشا الصور في حلقة ذكية معتمدة على دقة أعلى
+                # حل كابتشا الصور في حلقة ذكية معتمدة على دقة تحليل Gemini الجديدة
                 max_attempts = 10
                 for attempt in range(max_attempts):
                     bframe = None
@@ -175,7 +176,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break # تم حل الكابتشا واختفت النافذة بنجاح
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور بدقة (محاولة {attempt + 1})...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 حل تحدي الصور بذكاء (محاولة {attempt + 1})...")
                     
                     screenshot_path = f"captcha_attempt_{attempt}.png"
                     try:
@@ -216,7 +217,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     obtener_btn = await page.query_selector("button:has-text('Obtener código'), button[type='submit'], input[type='submit']")
                     if obtener_btn:
                         await obtener_btn.click(force=True)
-                        await page.wait_for_timeout(4000)
+                        await page.wait_for_timeout(5000)
                 except Exception as e:
                     print(f"خطأ أثناء النقر على زر جلب الكود: {e}")
 
@@ -226,7 +227,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(shot3, "rb") as photo:
                     await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية للطلب رقم {i+1}:")
 
-                # استخراج الكود أو الرابط الناتج من الصفحة
+                # استخراج الأكواد أو الروابط الناتجة من الصفحة بدقة
                 try:
                     content = await page.content()
                     found_links = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', content)
@@ -234,6 +235,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if "openai" in link or "code" in link or "bbva" in link:
                             if link not in all_extracted_codes and SITE_URL not in link:
                                 all_extracted_codes.append(link)
+                    
+                    # محاولة استخراج أي نص يمثل الكود مباشرة إذا ظهر في حاوية النتيجة
+                    result_element = await page.query_selector(".result-code, #code, pre, code")
+                    if result_element:
+                        code_text = await result_element.inner_text()
+                        if code_text and code_text.strip() not in all_extracted_codes:
+                            all_extracted_codes.append(code_text.strip())
                 except:
                     pass
 
