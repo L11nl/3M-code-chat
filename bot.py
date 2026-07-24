@@ -25,7 +25,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل بصرى فائق الدقة ومتقدم جداً لتجنب أي أخطاء في الكابتشا"""
+    """تحليل بصري دقيق جداً لصور الكابتشا المقصوصة بوضوح تام"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -37,9 +37,9 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
         grid_desc = "3x3 grid (9 tiles total: 1,2,3 top row; 4,5,6 middle row; 7,8,9 bottom row)" if total_tiles == 9 else f"{total_tiles} tiles grid row by row from top-left to bottom-right."
 
         prompt = (
-            f"You are an elite, world-class AI computer vision model specialized in solving Google reCAPTCHA v2 challenges with 100% precision. "
+            f"You are an elite AI computer vision model specialized in solving Google reCAPTCHA v2 challenges with 100% precision. "
             f"This image is a {grid_desc}. "
-            "CRITICAL INSTRUCTIONS: Read the target object specified at the top very carefully (e.g., 'a bus', 'a fire hydrant', 'crosswalks', 'traffic lights', 'bicycles', 'motorcycles'). "
+            "CRITICAL INSTRUCTIONS: Read the target object specified at the top very carefully (e.g., 'bicycles', 'a bus', 'a fire hydrant', 'crosswalks', 'traffic lights'). "
             "Examine every single tile with extreme scrutiny. Look at edges, corners, reflections, and small parts of the object. "
             "Rule 1: If ANY part of the requested object appears in a tile, you MUST include that tile number. "
             "Rule 2: Do not miss any matching tile, as missing even one tile causes failure. "
@@ -71,7 +71,7 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
     return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 البوت الذكي المتطور (وضع الإنسان الآلي) جاهز. أرسل عدد الأكواد المطلوبة:")
+    await update.message.reply_text("🚀 البوت الذكي المتطور جاهز. أرسل عدد الأكواد المطلوبة:")
 
 async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -162,7 +162,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود: {e}")
 
-                # حلقة حل صور الكابتشا (بنظام النقر البشري التسلسلي)
+                # حلقة حل صور الكابتشا مع التقاط دقيق وعرض المربعات المختارة مع علامات الصح
                 max_captcha_rounds = 10
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -183,24 +183,29 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break # تختفي الكابتشا إذا تم حلها بنجاح
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التحليل الفائق...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التحليل...")
                     
-                    # 1. التقاط صورة كاملة لتيليجرام
-                    full_shot_path = f"captcha_full_{round_num}.png"
-                    await page.screenshot(path=full_shot_path, full_page=True)
-                    with open(full_shot_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 صورة الكابتشا (الجولة {round_num + 1}):")
-
-                    # 2. التقاط صورة مخصصة لإطار الكابتشا لـ Gemini
+                    # تحديد إطار الكابتشا واقتصاصه بدقة تساهم في وضوحه تماماً لـ Gemini وللمستخدم
+                    captcha_element = await page.query_selector("iframe[src*='bframe']")
                     gemini_img_path = f"captcha_crop_{round_num}.png"
-                    try:
-                        captcha_element = await page.query_selector("iframe[src*='bframe']")
-                        if captcha_element:
-                            await captcha_element.screenshot(path=gemini_img_path)
+                    
+                    if captcha_element:
+                        box = await captcha_element.bounding_box()
+                        if box:
+                            await page.screenshot(path=gemini_img_path, clip={
+                                'x': box['x'],
+                                'y': box['y'],
+                                'width': box['width'],
+                                'height': box['height']
+                            })
                         else:
-                            await page.screenshot(path=gemini_img_path)
-                    except Exception:
+                            await captcha_element.screenshot(path=gemini_img_path)
+                    else:
                         await page.screenshot(path=gemini_img_path)
+
+                    # إرسال صورة الكابتشا الواضحة للمستخدم أولاً
+                    with open(gemini_img_path, "rb") as photo:
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا المطلوبة (الجولة {round_num + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
@@ -210,17 +215,23 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
 
                     try:
-                        # النقر البشري التسلسلي (صورة تلو الأخرى بفاصل زمني يشبه الإنسان)
+                        # النقر البشري التسلسلي (صورة تلو الأخرى بفاصل زمني طبيعي)
                         for box_num in correct_boxes:
                             if tiles and box_num <= len(tiles):
                                 await tiles[box_num - 1].click()
-                                # تأخير عشوائي بشري بين كل ضغطة وأخرى
-                                await asyncio.sleep(random.uniform(0.6, 1.3))
+                                await asyncio.sleep(random.uniform(0.6, 1.2))
                         
-                        # التقاط صورة بعد الاختيار لتظهر فيها المربعات المختارة بعلامات الصح
+                        await asyncio.sleep(1.0)
+
+                        # التقاط صورة جديدة **بعد الاختيار** لتظهر فيها علامات الصح (✓) واضحة تماماً للمستخدم
                         selection_shot_path = f"captcha_selected_{round_num}.png"
-                        if captcha_element:
-                            await captcha_element.screenshot(path=selection_shot_path)
+                        if captcha_element and box:
+                            await page.screenshot(path=selection_shot_path, clip={
+                                'x': box['x'],
+                                'y': box['y'],
+                                'width': box['width'],
+                                'height': box['height']
+                            })
                         else:
                             await page.screenshot(path=selection_shot_path)
                         
@@ -228,12 +239,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_photo(
                                 chat_id=chat_id, 
                                 photo=photo, 
-                                caption=f"☑️ المربعات التي اختارها البوت في الجولة {round_num + 1}: {correct_boxes}"
+                                caption=f"☑️ المربعات المختارة مع علامات الصح (الجولة {round_num + 1}): {correct_boxes}"
                             )
 
-                        await asyncio.sleep(random.uniform(1.0, 1.8))
+                        await asyncio.sleep(random.uniform(1.0, 1.5))
 
-                        # النقر على زر التحقق أو التالي حصرياً داخل إطار الكابتشا
+                        # النقر على زر التحقق أو التالي (VERIFY / NEXT)
                         action_btn = await bframe.query_selector("#recaptcha-verify-button, button:has-text('VERIFY'), button:has-text('NEXT')")
                         if action_btn:
                             await action_btn.click()
@@ -241,7 +252,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
 
-                # التقاط صورة للنتيجة النهائية بعد إتمام الطلب
+                # التقاط صورة للنتيجة النهائية بعد إتمام الطلب (كاملة وغير مقصوصة)
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3, full_page=True)
                 with open(shot3, "rb") as photo:
