@@ -53,21 +53,32 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with async_playwright() as p:
             try:
+                # استخدام متصفح النظام المثبت في السيرفر مباشرة لتفادي مشاكل التحميل
                 browser = await p.chromium.launch(
+                    executable_path="/usr/bin/chromium",
                     headless=True,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--headless=new"
+                    ]
                 )
             except Exception as e:
-                await status_msg.edit_text(f"❌ خطأ في تشغيل المتصفح: {e}")
+                await status_msg.edit_text(f"❌ خطأ في تشغيل متصفح النظام: {e}")
                 return
 
-            context_browser = await browser.new_context(viewport={"width": 1280, "height": 800})
+            context_browser = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
             page = await context_browser.new_page()
             current_page = page
 
             try:
-                await page.goto(SITE_URL, timeout=40000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(4000)
             except Exception as e:
                 await status_msg.edit_text(f"❌ خطأ أثناء فتح الموقع: {e}")
                 await browser.close()
