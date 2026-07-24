@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["python3", "chromium", "nss", "freetype", "harfbuzz", "ca-certificates", "ttf-liberation"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt", "playwright install chromium"]
