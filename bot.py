@@ -11,14 +11,18 @@ from google import genai
 from google.genai import types
 
 TOKEN = os.getenv("TOKEN")
-TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1003642554894"))
+TARGET_CHANNEL_ID_RAW = os.getenv("TARGET_CHANNEL_ID", "-1003642554894")
+try:
+    TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_RAW)
+except ValueError:
+    TARGET_CHANNEL_ID = -1003642554894
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
 
-# تهيئة عميل جمناي الرسمي
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 def generate_random_email():
@@ -26,7 +30,7 @@ def generate_random_email():
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
 async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
-    """تحليل بصري عالي الدقة لصور الكابتشا المقصوصة عبر Gemini"""
+    """تحليل بصري ذكي وعالي الدقة لتحديد مربعات الكابتشا المطلوبة بدقة مذهلة"""
     if not ai_client:
         logging.error("مفتاح جمناي غير متوفر!")
         return []
@@ -38,9 +42,9 @@ async def solve_captcha_with_gemini(image_path: str, total_tiles: int) -> list:
         grid_desc = "3x3 grid (9 tiles total: 1,2,3 top row; 4,5,6 middle row; 7,8,9 bottom row)" if total_tiles == 9 else f"{total_tiles} tiles grid row by row from top-left to bottom-right."
 
         prompt = (
-            f"You are an elite AI computer vision model specialized in solving Google reCAPTCHA v2 challenges with 100% precision. "
+            f"You are an elite, world-class AI computer vision model specialized in solving Google reCAPTCHA v2 challenges with 100% precision. "
             f"This image is a {grid_desc}. "
-            "CRITICAL INSTRUCTIONS: Read the target object specified at the top very carefully (e.g., 'bicycles', 'a bus', 'a fire hydrant', 'crosswalks', 'traffic lights'). "
+            "CRITICAL INSTRUCTIONS: Read the target object specified at the top very carefully (e.g., 'bicycles', 'a bus', 'a fire hydrant', 'crosswalks', 'traffic lights', 'motorcycles'). "
             "Examine every single tile with extreme scrutiny. Look at edges, corners, reflections, and small parts of the object. "
             "Rule 1: If ANY part of the requested object appears in a tile, you MUST include that tile number. "
             "Rule 2: Do not miss any matching tile, as missing even one tile causes failure. "
@@ -83,10 +87,9 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
 
-    # زر فحص مفتاح الـ AI
     if text == "فحص مفتاح الAi":
         if not GEMINI_API_KEY:
-            await update.message.reply_text("❌ متغير البيئة GEMINI_API_KEY غير موجود في منصة الاستضافة.")
+            await update.message.reply_text("❌ متغير البيئة GEMINI_API_KEY غير موجود أو فارغ في منصة الاستضافة.")
             return
         if not ai_client:
             await update.message.reply_text("❌ فشل تهيئة عميل Gemini.")
@@ -110,6 +113,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
+    
+    # فحص ذكي مسبق للاتصال قبل بدء العملية
+    if not ai_client:
+        await update.message.reply_text("❌ عذراً، لا يمكن بدء العمل لأن مفتاح الـ AI غير متصل أو غير مُعرّف بشكل صحيح!")
+        return
+
     status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود عبر جمناي...")
 
     try:
@@ -209,11 +218,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التحليل...")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت صور الكابتشا (الجولة {round_num + 1})، جاري التحليل الفائق...")
                     
                     captcha_element = await page.query_selector("iframe[src*='bframe']")
                     gemini_img_path = f"captcha_crop_{round_num}.png"
                     
+                    box = None
                     if captcha_element:
                         box = await captcha_element.bounding_box()
                         if box:
@@ -229,13 +239,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await page.screenshot(path=gemini_img_path)
 
                     with open(gemini_img_path, "rb") as photo:
-                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا المطلوبة (الجولة {round_num + 1}):")
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🔍 الكابتشا المطلوب تحليلها (الجولة {round_num + 1}):")
 
                     tiles = await bframe.query_selector_all(".rc-imageselect-tile")
                     total_tiles = len(tiles) if tiles else 9
 
                     correct_boxes = await solve_captcha_with_gemini(gemini_img_path, total_tiles)
-                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 حل Gemini للمربعات: {correct_boxes}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"🧠 تحليل Gemini للمربعات الصحيحة: {correct_boxes}")
 
                     try:
                         for box_num in correct_boxes:
@@ -260,7 +270,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_photo(
                                 chat_id=chat_id, 
                                 photo=photo, 
-                                caption=f"☑️ المربعات المختارة مع علامات الصح (الجولة {round_num + 1}): {correct_boxes}"
+                                caption=f"☑️ المربعات التي تم النقر عليها (الجولة {round_num + 1}): {correct_boxes}"
                             )
 
                         await asyncio.sleep(random.uniform(1.0, 1.5))
@@ -269,6 +279,25 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if action_btn:
                             await action_btn.click()
                             await page.wait_for_timeout(4000)
+                        
+                        # فحص ما إذا تم تجاوز الكابتشا أم تكررت الصورة
+                        await page.wait_for_timeout(2000)
+                        still_active = False
+                        for frame in page.frames:
+                            if "bframe" in frame.url:
+                                try:
+                                    p_load = await frame.query_selector(".rc-imageselect-payload")
+                                    if p_load and await p_load.is_visible():
+                                        still_active = True
+                                except:
+                                    pass
+
+                        if still_active:
+                            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ لم يتم قبول الحل في الجولة {round_num + 1} وتكررت الصور، جاري إعادة المحاولة بمجموع جديدة...")
+                        else:
+                            await context.bot.send_message(chat_id=chat_id, text=f"✅ تم حل الكابتشا بنجاح في الجولة {round_num + 1}!")
+                            break
+
                     except Exception as e:
                         print(f"خطأ أثناء النقر على المربعات أو زر التأكيد: {e}")
 
