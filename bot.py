@@ -33,18 +33,31 @@ def generate_random_email():
     chars = string.ascii_lowercase + string.digits
     return f"{''.join(random.choices(chars, k=10))}@gmail.com"
 
+async def human_delay(min_sec=1.0, max_sec=2.5):
+    """تأخير زمني عشوائي لمحاكاة السلوك البشري"""
+    await asyncio.sleep(random.uniform(min_sec, max_sec))
+
 async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
-    """حل الكابتشا عبر التحدي الصوتي محلياً وبشكل مجاني تماماً"""
+    """حل الكابتشا عبر التحدي الصوتي مع محاكاة البشر"""
     try:
         await context.bot.send_message(chat_id=chat_id, text="🎧 جاري التحويل إلى التحدي الصوتي...")
         
+        # 1. النقر على أيقونة الصوت بتأخير
+        await human_delay(1.5, 2.5)
         audio_btn = await bframe.query_selector("#recaptcha-audio-button")
         if not audio_btn:
             logging.error("لم يتم العثور على زر الصوت.")
             return False
         await audio_btn.click()
-        await page.wait_for_timeout(2500)
+        await page.wait_for_timeout(3000)
 
+        # التحقق من رسالة الحظر "Try again later"
+        doscaptcha = await bframe.query_selector(".rc-doscaptcha-header")
+        if doscaptcha and await doscaptcha.is_visible():
+            await context.bot.send_message(chat_id=chat_id, text="🚫 جوجل قامت بحظر الـ IP مؤقتاً (Try again later). يرجى المحاولة بعد فترة أو استخدام بروكسي.")
+            return False
+
+        # 2. استخراج رابط الصوت
         audio_url = await bframe.evaluate("""() => {
             const audioSource = document.querySelector('.rc-audiocore-download-link') || document.querySelector('audio');
             return audioSource ? (audioSource.href || audioSource.src) : null;
@@ -60,45 +73,61 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
             logging.error("لم يتم العثور على رابط ملف الصوت.")
             return False
 
+        # 3. تحميل الصوت
         audio_response = await page.request.get(audio_url)
         mp3_bytes = await audio_response.body()
         if not mp3_bytes:
-            logging.error("فشل تحميل ملف الصوت.")
             return False
 
+        # 4. تحويل الصوت
         sound = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
         wav_io = io.BytesIO()
         sound.export(wav_io, format="wav")
         wav_io.seek(0)
 
+        # 5. تفريغ الصوت
         r = sr.Recognizer()
         with sr.AudioFile(wav_io) as source:
             audio_data = r.record(source)
         
         captcha_text = r.recognize_google(audio_data)
-        await context.bot.send_message(chat_id=chat_id, text=f"✍️ النص المستخرج من الصوت: {captcha_text}")
+        await context.bot.send_message(chat_id=chat_id, text=f"✍️ النص المستخرج: {captcha_text}")
 
+        # 6. كتابة النص كبشر (حرف حرف)
         audio_input = await bframe.query_selector("#audio-response")
         if audio_input:
-            await audio_input.fill(captcha_text)
-            await asyncio.sleep(1.0)
+            await human_delay(1.0, 2.0)
+            # مسح الحقل أولاً احتياطياً
+            await audio_input.fill("")
+            # كتابة النص ببطء لمحاكاة الكيبورد البشري
+            for char in captcha_text:
+                await audio_input.type(char, delay=random.randint(150, 350))
+            
+            await human_delay(1.0, 2.0)
 
+            # 7. الضغط على تحقق
             verify_btn = await bframe.query_selector("#recaptcha-verify-button")
             if verify_btn:
                 await verify_btn.click()
-                await page.wait_for_timeout(3500)
+                await page.wait_for_timeout(4000)
                 
+                # التحقق إذا كانت الإجابة خاطئة
                 error_msg = await bframe.query_selector(".rc-audiochallenge-error-message")
                 if error_msg and await error_msg.is_visible():
-                    logging.error("الرد الصوتي غير صحيح أو تم رفضه.")
-                    return False
+                    error_text = await error_msg.inner_text()
+                    if "Multiple correct solutions required" in error_text:
+                        await context.bot.send_message(chat_id=chat_id, text="🔄 جوجل تطلب حل صوت إضافي للتأكد (Multiple solutions)، جاري الحل مرة ثانية...")
+                        return "RETRY" # إرجاع حالة خاصة لإعادة المحاولة فوراً
+                    else:
+                        logging.error("الرد الصوتي غير صحيح.")
+                        return False
                     
                 return True
 
     except sr.UnknownValueError:
-        logging.error("لم يتمكن النظام من فهم الصوت (قد يكون مشوشاً جداً).")
+        logging.error("الصوت مشوش وغير مفهوم.")
     except Exception as e:
-        logging.error(f"خطأ غير متوقع في حل الكابتشا الصوتي: {e}")
+        logging.error(f"خطأ في حل الكابتشا الصوتي: {e}")
     
     return False
 
@@ -108,7 +137,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي جاهز (مدعوم بنظام التخفي الذاتي والتخطي الصوتي).\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
+        "🚀 البوت الذكي جاهز (إصدار المحاكاة البشرية المتقدمة).\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
         reply_markup=reply_markup
     )
 
@@ -118,31 +147,31 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "فحص مفتاح الAi":
         if not GEMINI_API_KEY:
-            await update.message.reply_text("❌ متغير البيئة GEMINI_API_KEY غير موجود أو فارغ في منصة الاستضافة.")
+            await update.message.reply_text("❌ متغير البيئة GEMINI_API_KEY غير موجود.")
             return
         if not ai_client:
             await update.message.reply_text("❌ فشل تهيئة عميل Gemini.")
             return
         
-        checking_msg = await update.message.reply_text("🔍 جاري فحص الاتصال بمفتاح جمناي...")
+        checking_msg = await update.message.reply_text("🔍 جاري فحص الاتصال...")
         try:
             response = ai_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents="Say 'CONNECTED'",
             )
             if response and response.text:
-                await checking_msg.edit_text(f"✅ مفتاح Gemini يعمل بكفاءة ومتصل بنجاح!\nرد النموذج التجريبي: {response.text.strip()}")
+                await checking_msg.edit_text(f"✅ متصل بنجاح: {response.text.strip()}")
             else:
-                await checking_msg.edit_text("⚠️ المفتاح متصل ولكن لم يتم استلام رد صحيح من النموذج.")
+                await checking_msg.edit_text("⚠️ متصل بدون رد صحيح.")
         except Exception as e:
-            await checking_msg.edit_text(f"❌ فشل الاتصال بمفتاح جمناي:\n{e}")
+            await checking_msg.edit_text(f"❌ فشل الاتصال:\n{e}")
         return
 
     if not text.isdigit():
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود ببطء بشري...")
 
     try:
         async with async_playwright() as p:
@@ -155,6 +184,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
                         "--disable-blink-features=AutomationControlled",
+                        "--window-size=1920,1080",
                         "--headless=new"
                     ]
                 )
@@ -169,17 +199,23 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             page = await context_browser.new_page()
             
-            # حقن التخفي المباشر (بديل مكتبة stealth الذي لا يتعطل أبداً)
+            # حقن تخفي متطور جداً
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                 window.chrome = { runtime: {} };
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
                 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+                );
             """)
 
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                await human_delay(2.0, 4.0)
                 
                 shot1 = "step_1_open.png"
                 await page.screenshot(path=shot1, full_page=True)
@@ -197,19 +233,23 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 email_input = await page.query_selector("input[name='email'], input[type='email']")
                 if email_input:
-                    await email_input.fill(email)
+                    await email_input.fill("") # تفريغ الحقل
+                    # كتابة الإيميل ببطء
+                    for char in email:
+                        await email_input.type(char, delay=random.randint(50, 150))
+                    
                     await page.evaluate("""el => {
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }""", email_input)
 
-                await page.wait_for_timeout(1000)
+                await human_delay(1.5, 2.5)
 
                 submit_btn = await page.query_selector("button[type='submit'], input[type='submit']")
                 if submit_btn:
                     await submit_btn.click(force=True)
 
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(4000)
 
                 shot2 = "step_2_submitted.png"
                 await page.screenshot(path=shot2, full_page=True)
@@ -226,12 +266,14 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if recaptcha_frame:
                         checkbox = await recaptcha_frame.wait_for_selector("#recaptcha-anchor", timeout=4000)
                         if checkbox:
+                            await human_delay(1.0, 2.0)
                             await checkbox.click()
-                            await page.wait_for_timeout(3000)
+                            await page.wait_for_timeout(3500)
                 except Exception as e:
-                    print(f"مربع التحقق غير موجود (قد يكون تم التخطي تلقائياً): {e}")
+                    print(f"مربع التحقق غير موجود: {e}")
 
-                max_captcha_rounds = 3
+                # نظام الجولات للكابتشا (يدعم طلب صوت إضافي)
+                max_captcha_rounds = 5
                 for round_num in range(max_captcha_rounds):
                     bframe = None
                     for frame in page.frames:
@@ -242,7 +284,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     is_captcha_active = False
                     if bframe:
                         try:
-                            payload = await bframe.query_selector(".rc-imageselect-payload, .rc-audiochallenge-payload")
+                            payload = await bframe.query_selector(".rc-imageselect-payload, .rc-audiochallenge-payload, .rc-doscaptcha-header")
                             if payload and await payload.is_visible():
                                 is_captcha_active = True
                         except:
@@ -251,12 +293,24 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break
 
-                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت الكابتشا (الجولة {round_num + 1})، جاري التخطي الصوتي...")
+                    # فحص إذا تم الحظر من الأساس قبل محاولة الحل
+                    try:
+                        doscaptcha_main = await bframe.query_selector(".rc-doscaptcha-header")
+                        if doscaptcha_main and await doscaptcha_main.is_visible():
+                            await context.bot.send_message(chat_id=chat_id, text="🚫 الموقع حظر الـ IP مؤقتاً (Try again later). سيتم تخطي هذا الطلب.")
+                            break
+                    except:
+                        pass
+
+                    await context.bot.send_message(chat_id=chat_id, text=f"🤖 ظهرت الكابتشا (الجولة {round_num + 1})، جاري الحل...")
 
                     audio_solved = await solve_captcha_via_free_audio(page, bframe, chat_id, context)
                     
-                    if audio_solved:
-                        await page.wait_for_timeout(2000)
+                    if audio_solved == "RETRY":
+                        # إذا طلبت جوجل حل إضافي، نستمر بالحلقة ولا نكسرها
+                        continue
+                    elif audio_solved == True:
+                        await page.wait_for_timeout(3000)
                         still_active = False
                         for frame in page.frames:
                             if "bframe" in frame.url:
@@ -268,12 +322,12 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     pass
 
                         if still_active:
-                            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ لم يتم قبول الحل في الجولة {round_num + 1}، جاري إعادة المحاولة...")
+                            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ لم يتم قبول الحل، جاري المحاولة...")
                         else:
-                            await context.bot.send_message(chat_id=chat_id, text=f"✅ تم حل الكابتشا بنجاح في الجولة {round_num + 1}!")
+                            await context.bot.send_message(chat_id=chat_id, text=f"✅ تم حل الكابتشا بنجاح!")
                             break
                     else:
-                        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الحل الصوتي في الجولة {round_num + 1}، جاري إعادة المحاولة...")
+                        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الحل، جاري المحاولة...")
 
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3, full_page=True)
@@ -298,7 +352,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"خطأ في استخراج الكود من الحقول: {e}")
 
-                await asyncio.sleep(2)
+                await human_delay(3.0, 5.0) # انتظار طويل بين كل طلب وطلب لتخفيف الضغط
 
             if all_extracted_codes:
                 final_text = "\n".join(all_extracted_codes)
