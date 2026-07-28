@@ -3,4 +3,3 @@ playwright
 python-telegram-bot
 SpeechRecognition
 pydub
-playwright-stealth
