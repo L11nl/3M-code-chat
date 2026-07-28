@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# تثبيت متطلبات النظام الأساسية لكي يعمل متصفح Playwright بسلاسة
+# تثبيت متطلبات النظام الأساسية لكي يعمل متصفح Playwright بسلاسة بالإضافة إلى ffmpeg لمعالجة الصوت
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
