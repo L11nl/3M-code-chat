@@ -9,7 +9,6 @@ from pydub import AudioSegment
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 from google import genai
 
 # ================= الإعدادات والمتغيرات =================
@@ -109,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي جاهز (مدعوم بنظام التخفي والتخطي الصوتي).\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
+        "🚀 البوت الذكي جاهز (مدعوم بنظام التخفي الذاتي والتخطي الصوتي).\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
         reply_markup=reply_markup
     )
 
@@ -169,7 +168,14 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             
             page = await context_browser.new_page()
-            await stealth_async(page)
+            
+            # حقن التخفي المباشر (بديل مكتبة stealth الذي لا يتعطل أبداً)
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            """)
 
             try:
                 await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
