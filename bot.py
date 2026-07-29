@@ -126,7 +126,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي جاهز (إصدار المحاكاة البشرية المتقدمة).\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
+        "🚀 البوت الذكي جاهز.\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
         reply_markup=reply_markup
     )
 
@@ -314,73 +314,83 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الحل، جاري المحاولة...")
 
                 # ==========================================
-                # الخطوة الجديدة: الضغط على زر Obtener código
+                # الخطوة 3: الضغط على زر "Obtener código"
                 # ==========================================
-                await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري الضغط على الزر النهائي لإنشاء الرابط...")
+                await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري الضغط على زر 'Obtener código' الأولي...")
                 try:
-                    # البحث عن الزر الأزرق الذي يحتوي على كلمة Obtener
-                    final_btn = await page.query_selector("button:has-text('Obtener'), button[type='submit']")
-                    if final_btn:
+                    obtener_btn = await page.query_selector("button:has-text('Obtener'), button[type='submit']")
+                    if obtener_btn:
                         await human_delay(1.0, 2.0)
-                        await final_btn.click(force=True)
+                        await obtener_btn.click(force=True)
                     elif email_input:
-                        # بديل في حال لم يتم العثور على الزر: الضغط على Enter في حقل الإيميل
                         await email_input.press("Enter")
                 except Exception as e:
-                    print(f"خطأ في الضغط على الزر النهائي: {e}")
+                    print(f"خطأ في الضغط على Obtener: {e}")
                 
-                # انتظار 6 ثواني ليتم إنشاء الرابط وتحميل الصفحة
-                await page.wait_for_timeout(6000)
+                # انتظار 5 ثواني لظهور صفحة الكود والزر السمائي
+                await page.wait_for_timeout(5000)
 
-                shot3 = f"step_3_result_{i+1}.png"
+                shot3 = f"step_3_code_generated_{i+1}.png"
                 await page.screenshot(path=shot3, full_page=True)
                 with open(shot3, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1} بعد الضغط:")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 تم توليد الكود (طلب {i+1})، جاري التفعيل وسحب الرابط...")
 
                 # ==========================================
-                # التحديث الجديد: استخراج الرابط بشكل شامل
+                # الخطوة 4: سحب الكود والضغط على 'Actívalo ya'
                 # ==========================================
                 try:
-                    extracted_values = await page.evaluate("""() => {
-                        let values = [];
-                        
-                        // 1. البحث في حقول الإدخال
-                        const inputs = document.querySelectorAll('input[type="text"], input[type="url"], input:not([type]), textarea');
-                        inputs.forEach(el => {
-                            if (el.value && el.value.trim().length > 10 && !el.value.includes('@')) {
-                                values.push(el.value.trim());
-                            }
-                        });
-                        
-                        // 2. البحث عن أي نص يحتوي على رابط ويب في الصفحة
-                        if (values.length === 0) {
-                            const allText = document.body.innerText;
-                            // استخراج أي رابط يبدأ بـ http أو https
-                            const urlRegex = /(https?:\/\/[^\s]+)/g;
-                            const matches = allText.match(urlRegex);
-                            if (matches) {
-                                values = values.concat(matches);
+                    # استخراج الكود النصي كاحتياط
+                    promo_code = await page.evaluate("""() => {
+                        const inputs = document.querySelectorAll('input[type="text"]');
+                        for (let el of inputs) {
+                            if (el.value && el.value.length > 8 && !el.value.includes('@')) {
+                                return el.value.trim();
                             }
                         }
-                        
-                        return values;
+                        return "";
                     }""")
-                    
-                    for val in extracted_values:
-                        # فلترة الروابط حتى لا نأخذ رابط الكابتشا أو الموقع الأساسي بالغلط
-                        if val not in all_extracted_codes and "recaptcha" not in val and SITE_URL not in val:
-                            all_extracted_codes.append(val)
-                except Exception as e:
-                    print(f"خطأ في استخراج الكود/الرابط: {e}")
 
-                await human_delay(3.0, 5.0)
+                    # البحث عن الزر السمائي
+                    activalo_btn = await page.query_selector("text='Actívalo ya', a:has-text('Actívalo ya'), button:has-text('Actívalo ya')")
+                    extracted_link = ""
+                    
+                    if activalo_btn:
+                        # جلب الرابط المباشر من الزر (إذا كان الزر عبارة عن رابط)
+                        extracted_link = await activalo_btn.get_attribute("href")
+                        
+                        # الضغط على الزر لتفعيل الكود
+                        await human_delay(1.0, 2.0)
+                        await activalo_btn.click(force=True)
+                        await page.wait_for_timeout(4000)
+                    
+                    # إذا لم نجد الرابط في الزر، نسحبه من متصفح الصفحة بعد الضغط
+                    if not extracted_link or extracted_link == "#" or not extracted_link.startswith("http"):
+                        extracted_link = page.url
+
+                    # ترتيب وتنسيق النتيجة النهائية للإرسال
+                    final_result = ""
+                    if extracted_link and SITE_URL not in extracted_link and extracted_link.startswith("http"):
+                        if promo_code:
+                            final_result = f"🎁 الكود: `{promo_code}`\n🔗 الرابط: {extracted_link}"
+                        else:
+                            final_result = f"🔗 الرابط: {extracted_link}"
+                    elif promo_code:
+                        final_result = f"🎁 الكود: `{promo_code}`"
+                        
+                    if final_result and final_result not in all_extracted_codes:
+                        all_extracted_codes.append(final_result)
+
+                except Exception as e:
+                    print(f"خطأ في خطوة Actívalo ya: {e}")
+
+                await human_delay(3.0, 5.0) # انتظار لتخفيف الضغط بين الطلبات
 
             if all_extracted_codes:
-                final_text = "\n".join(all_extracted_codes)
-                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الروابط المستخرجة:\n{final_text}")
-                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} رابط إلى قناتك!")
+                final_text = "\n\n".join(all_extracted_codes)
+                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الأكواد والروابط المستخرجة:\n\n{final_text}")
+                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} تفعيل إلى قناتك!")
             else:
-                await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصورة الأخيرة للتأكد من النتيجة (لم يتم العثور على رابط).")
+                await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصور للتأكد من النتيجة.")
                 
             await browser.close()
             
