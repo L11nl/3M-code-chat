@@ -64,7 +64,7 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
 
         doscaptcha = await bframe.query_selector(".rc-doscaptcha-header")
         if doscaptcha and await doscaptcha.is_visible():
-            await context.bot.send_message(chat_id=chat_id, text="🚫 البروكسي الحالي محظور مؤقتاً (Try again later). سيتم تجربة بروكسي آخر.")
+            await context.bot.send_message(chat_id=chat_id, text="🚫 البروكسي الحالي محظور مؤقتاً (Try again later).")
             return False
 
         audio_url = await bframe.evaluate("""() => {
@@ -135,7 +135,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي جاهز ومحمي بالبروكسيات.\nأرسل عدد الروابط المطلوبة لاستخراجها:",
+        "🚀 البوت الذكي جاهز ومحمي بالبروكسيات مع ميزة التصوير.\nأرسل عدد الروابط المطلوبة لاستخراجها:",
         reply_markup=reply_markup
     )
 
@@ -151,7 +151,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري استخراج {count} رابط...\n(سيتم استخدام IP مختلف لكل طلب)")
+    status_msg = await update.message.reply_text(f"⚡ جاري استخراج {count} رابط...\n(سيتم استخدام IP مختلف وتصوير الخطوات لكل طلب)")
 
     all_extracted_codes = []
 
@@ -160,7 +160,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(count):
                 await context.bot.send_message(chat_id=chat_id, text=f"🔄 بدء العمل على الطلب ({i+1}/{count})...")
                 
-                # اختيار بروكسي عشوائي لكل عملية جديدة
                 raw_proxy = random.choice(PROXIES_LIST)
                 proxy_parts = raw_proxy.split(":")
                 playwright_proxy = None
@@ -173,7 +172,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     }
                 
                 try:
-                    # فتح متصفح جديد كلياً بالبروكسي المختار
                     browser = await p.chromium.launch(
                         headless=True,
                         proxy=playwright_proxy,
@@ -193,7 +191,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     page = await context_browser.new_page()
                     
-                    # حقن التخفي
                     await page.add_init_script("""
                         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                         window.chrome = { runtime: {} };
@@ -201,9 +198,16 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     """)
 
+                    # انتظار تحميل الموقع (زدنا الوقت لأن البروكسيات قد تكون بطيئة)
                     await page.goto(SITE_URL, timeout=60000, wait_until="domcontentloaded")
-                    await human_delay(2.0, 4.0)
+                    await human_delay(3.0, 5.0)
                     
+                    # ======= لقطة الشاشة 1: فتح الموقع =======
+                    shot1 = f"step_1_open_{i+1}.png"
+                    await page.screenshot(path=shot1, full_page=True)
+                    with open(shot1, "rb") as photo:
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🌐 الخطوة 1 (طلب {i+1}): تم فتح الموقع بنجاح بالبروكسي.")
+
                     email = generate_random_email()
                     email_input = await page.query_selector("input[name='email'], input[type='email']")
                     if email_input:
@@ -217,7 +221,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if submit_btn:
                         await submit_btn.click(force=True)
 
-                    await page.wait_for_timeout(4000)
+                    await page.wait_for_timeout(5000)
+
+                    # ======= لقطة الشاشة 2: بعد إرسال الإيميل =======
+                    shot2 = f"step_2_submitted_{i+1}.png"
+                    await page.screenshot(path=shot2, full_page=True)
+                    with open(shot2, "rb") as photo:
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"✉️ الخطوة 2 (طلب {i+1}): إدخال الإيميل وإرسال الطلب.")
 
                     try:
                         recaptcha_frame = None
@@ -230,11 +240,10 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if checkbox:
                                 await human_delay(1.0, 2.0)
                                 await checkbox.click()
-                                await page.wait_for_timeout(3500)
+                                await page.wait_for_timeout(4000)
                     except Exception:
                         pass
 
-                    # معالجة الكابتشا
                     for round_num in range(5):
                         bframe = None
                         for frame in page.frames:
@@ -257,7 +266,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if audio_solved == "RETRY":
                             continue
                         elif audio_solved == True:
-                            await page.wait_for_timeout(3000)
+                            await page.wait_for_timeout(4000)
                             break
 
                     await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري توليد الكود...")
@@ -270,7 +279,13 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
                     
-                    await page.wait_for_timeout(5000)
+                    await page.wait_for_timeout(6000)
+
+                    # ======= لقطة الشاشة 3: النتيجة النهائية =======
+                    shot3 = f"step_3_result_{i+1}.png"
+                    await page.screenshot(path=shot3, full_page=True)
+                    with open(shot3, "rb") as photo:
+                        await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 النتيجة النهائية (طلب {i+1}): صفحة استخراج الكود.")
 
                     # استخراج الكود
                     promo_code = await page.evaluate("""() => {
@@ -289,22 +304,21 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             all_extracted_codes.append(final_link)
                             await context.bot.send_message(chat_id=chat_id, text=f"✅ تم سحب الطلب ({i+1}): {promo_code}")
                     else:
-                        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الطلب ({i+1}): لم يتم العثور على الكود (قد يكون البروكسي بطيئاً).")
+                        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الطلب ({i+1}): راجع الصورة الأخيرة لمعرفة السبب.")
                         
                 except Exception as e:
-                    print(f"حدث خطأ في الطلب {i+1}: {e}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"❌ خطأ أثناء معالجة الطلب {i+1} (قد يكون بسبب بطء البروكسي): {e}")
                 finally:
-                    # إغلاق المتصفح تماماً بعد كل عملية لتنظيف الكوكيز والـ IP
-                    await browser.close()
+                    if 'browser' in locals():
+                        await browser.close()
                     await human_delay(2.0, 4.0)
 
-            # إرسال كل الروابط للقناة بالنهاية
             if all_extracted_codes:
                 final_text = "\n".join(all_extracted_codes)
                 await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 تم سحب الروابط بنجاح:\n\n{final_text}")
                 await status_msg.edit_text(f"✅ تمت العملية. إرسال {len(all_extracted_codes)} رابط جاهز إلى قناتك!")
             else:
-                await status_msg.edit_text(f"❌ انتهت العملية ولم يتم سحب أي رابط بنجاح. قد يكون هناك ضغط على الموقع أو البروكسيات محظورة.")
+                await status_msg.edit_text(f"❌ انتهت العملية ولم يتم سحب أي رابط بنجاح. يرجى مراجعة الصور.")
                 
     except Exception as e:
         await status_msg.edit_text(f"❌ حدث خطأ غير متوقع: {e}")
