@@ -24,6 +24,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 SITE_URL = "https://www.bbvadescuentos.mx/develop/openai-3msc"
+BASE_UP_URL = "http://www.chatgpt.com/up/"
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -126,7 +127,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[KeyboardButton("فحص مفتاح الAi")]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
-        "🚀 البوت الذكي جاهز.\nأرسل عدد الأكواد المطلوبة لاستخراجها:",
+        "🚀 البوت الذكي جاهز.\nأرسل عدد الروابط المطلوبة لاستخراجها:",
         reply_markup=reply_markup
     )
 
@@ -160,7 +161,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} رابط ببطء بشري...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} رابط...")
 
     try:
         async with async_playwright() as p:
@@ -316,7 +317,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # ==========================================
                 # الخطوة 3: الضغط على زر "Obtener código"
                 # ==========================================
-                await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري الضغط على زر 'Obtener código' الأولي...")
+                await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري الضغط على زر 'Obtener código'...")
                 try:
                     obtener_btn = await page.query_selector("button:has-text('Obtener'), button[type='submit']")
                     if obtener_btn:
@@ -327,19 +328,19 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"خطأ في الضغط على Obtener: {e}")
                 
-                # انتظار 5 ثواني لظهور صفحة الكود والزر السمائي
+                # انتظار 5 ثواني لظهور صفحة الكود
                 await page.wait_for_timeout(5000)
 
                 shot3 = f"step_3_code_generated_{i+1}.png"
                 await page.screenshot(path=shot3, full_page=True)
                 with open(shot3, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 تم توليد الكود (طلب {i+1})، جاري التفعيل وسحب الرابط...")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 تم توليد الكود (طلب {i+1})...")
 
                 # ==========================================
-                # الخطوة 4: سحب الكود والضغط على 'Actívalo ya'
+                # الخطوة 4: سحب الكود ودمجه مع الرابط
                 # ==========================================
                 try:
-                    # استخراج الكود النصي كاحتياط
+                    # استخراج الكود النصي من الحقل (يجب أن لا يحتوي على @ ويكون أطول من 8 أحرف)
                     promo_code = await page.evaluate("""() => {
                         const inputs = document.querySelectorAll('input[type="text"]');
                         for (let el of inputs) {
@@ -350,45 +351,26 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return "";
                     }""")
 
-                    # البحث عن الزر السمائي
-                    activalo_btn = await page.query_selector("text='Actívalo ya', a:has-text('Actívalo ya'), button:has-text('Actívalo ya')")
-                    extracted_link = ""
-                    
-                    if activalo_btn:
-                        # جلب الرابط المباشر من الزر (إذا كان الزر عبارة عن رابط)
-                        extracted_link = await activalo_btn.get_attribute("href")
+                    if promo_code:
+                        # إنشاء الرابط النهائي بدمج الكود مع رابط chatgpt
+                        final_link = f"{BASE_UP_URL}{promo_code}"
                         
-                        # الضغط على الزر لتفعيل الكود
-                        await human_delay(1.0, 2.0)
-                        await activalo_btn.click(force=True)
-                        await page.wait_for_timeout(4000)
-                    
-                    # إذا لم نجد الرابط في الزر، نسحبه من متصفح الصفحة بعد الضغط
-                    if not extracted_link or extracted_link == "#" or not extracted_link.startswith("http"):
-                        extracted_link = page.url
-
-                    # ترتيب وتنسيق النتيجة النهائية للإرسال
-                    final_result = ""
-                    if extracted_link and SITE_URL not in extracted_link and extracted_link.startswith("http"):
-                        if promo_code:
-                            final_result = f"🎁 الكود: `{promo_code}`\n🔗 الرابط: {extracted_link}"
-                        else:
-                            final_result = f"🔗 الرابط: {extracted_link}"
-                    elif promo_code:
-                        final_result = f"🎁 الكود: `{promo_code}`"
-                        
-                    if final_result and final_result not in all_extracted_codes:
-                        all_extracted_codes.append(final_result)
+                        if final_link not in all_extracted_codes:
+                            all_extracted_codes.append(final_link)
+                            await context.bot.send_message(chat_id=chat_id, text=f"✅ تم دمج الكود وتجهيز الرابط:\n{final_link}")
+                    else:
+                        await context.bot.send_message(chat_id=chat_id, text="⚠️ لم يتم العثور على الكود في الحقل.")
 
                 except Exception as e:
-                    print(f"خطأ في خطوة Actívalo ya: {e}")
+                    print(f"خطأ في خطوة سحب الكود: {e}")
 
-                await human_delay(3.0, 5.0) # انتظار لتخفيف الضغط بين الطلبات
+                await human_delay(2.0, 4.0) # انتظار بين الطلبات لتخفيف الضغط
 
+            # إرسال كل الروابط للقناة دفعة واحدة
             if all_extracted_codes:
-                final_text = "\n\n".join(all_extracted_codes)
-                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الأكواد والروابط المستخرجة:\n\n{final_text}")
-                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} تفعيل إلى قناتك!")
+                final_text = "\n".join(all_extracted_codes)
+                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الروابط الجاهزة:\n\n{final_text}")
+                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} رابط جاهز إلى قناتك!")
             else:
                 await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصور للتأكد من النتيجة.")
                 
