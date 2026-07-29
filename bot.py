@@ -42,7 +42,6 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
     try:
         await context.bot.send_message(chat_id=chat_id, text="🎧 جاري التحويل إلى التحدي الصوتي...")
         
-        # 1. النقر على أيقونة الصوت بتأخير
         await human_delay(1.5, 2.5)
         audio_btn = await bframe.query_selector("#recaptcha-audio-button")
         if not audio_btn:
@@ -51,13 +50,11 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
         await audio_btn.click()
         await page.wait_for_timeout(3000)
 
-        # التحقق من رسالة الحظر "Try again later"
         doscaptcha = await bframe.query_selector(".rc-doscaptcha-header")
         if doscaptcha and await doscaptcha.is_visible():
             await context.bot.send_message(chat_id=chat_id, text="🚫 جوجل قامت بحظر الـ IP مؤقتاً (Try again later). يرجى المحاولة بعد فترة أو استخدام بروكسي.")
             return False
 
-        # 2. استخراج رابط الصوت
         audio_url = await bframe.evaluate("""() => {
             const audioSource = document.querySelector('.rc-audiocore-download-link') || document.querySelector('audio');
             return audioSource ? (audioSource.href || audioSource.src) : null;
@@ -73,19 +70,16 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
             logging.error("لم يتم العثور على رابط ملف الصوت.")
             return False
 
-        # 3. تحميل الصوت
         audio_response = await page.request.get(audio_url)
         mp3_bytes = await audio_response.body()
         if not mp3_bytes:
             return False
 
-        # 4. تحويل الصوت
         sound = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
         wav_io = io.BytesIO()
         sound.export(wav_io, format="wav")
         wav_io.seek(0)
 
-        # 5. تفريغ الصوت
         r = sr.Recognizer()
         with sr.AudioFile(wav_io) as source:
             audio_data = r.record(source)
@@ -93,31 +87,26 @@ async def solve_captcha_via_free_audio(page, bframe, chat_id, context) -> bool:
         captcha_text = r.recognize_google(audio_data)
         await context.bot.send_message(chat_id=chat_id, text=f"✍️ النص المستخرج: {captcha_text}")
 
-        # 6. كتابة النص كبشر (حرف حرف)
         audio_input = await bframe.query_selector("#audio-response")
         if audio_input:
             await human_delay(1.0, 2.0)
-            # مسح الحقل أولاً احتياطياً
             await audio_input.fill("")
-            # كتابة النص ببطء لمحاكاة الكيبورد البشري
             for char in captcha_text:
                 await audio_input.type(char, delay=random.randint(150, 350))
             
             await human_delay(1.0, 2.0)
 
-            # 7. الضغط على تحقق
             verify_btn = await bframe.query_selector("#recaptcha-verify-button")
             if verify_btn:
                 await verify_btn.click()
                 await page.wait_for_timeout(4000)
                 
-                # التحقق إذا كانت الإجابة خاطئة
                 error_msg = await bframe.query_selector(".rc-audiochallenge-error-message")
                 if error_msg and await error_msg.is_visible():
                     error_text = await error_msg.inner_text()
                     if "Multiple correct solutions required" in error_text:
                         await context.bot.send_message(chat_id=chat_id, text="🔄 جوجل تطلب حل صوت إضافي للتأكد (Multiple solutions)، جاري الحل مرة ثانية...")
-                        return "RETRY" # إرجاع حالة خاصة لإعادة المحاولة فوراً
+                        return "RETRY" 
                     else:
                         logging.error("الرد الصوتي غير صحيح.")
                         return False
@@ -171,7 +160,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = int(text)
-    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} كود ببطء بشري...")
+    status_msg = await update.message.reply_text(f"⚡ جاري بدء العمل واستخراج {count} رابط ببطء بشري...")
 
     try:
         async with async_playwright() as p:
@@ -199,7 +188,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             page = await context_browser.new_page()
             
-            # حقن تخفي متطور جداً
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                 window.chrome = { runtime: {} };
@@ -233,8 +221,7 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 email_input = await page.query_selector("input[name='email'], input[type='email']")
                 if email_input:
-                    await email_input.fill("") # تفريغ الحقل
-                    # كتابة الإيميل ببطء
+                    await email_input.fill("") 
                     for char in email:
                         await email_input.type(char, delay=random.randint(50, 150))
                     
@@ -272,7 +259,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"مربع التحقق غير موجود: {e}")
 
-                # نظام الجولات للكابتشا (يدعم طلب صوت إضافي)
                 max_captcha_rounds = 5
                 for round_num in range(max_captcha_rounds):
                     bframe = None
@@ -293,7 +279,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not is_captcha_active:
                         break
 
-                    # فحص إذا تم الحظر من الأساس قبل محاولة الحل
                     try:
                         doscaptcha_main = await bframe.query_selector(".rc-doscaptcha-header")
                         if doscaptcha_main and await doscaptcha_main.is_visible():
@@ -307,7 +292,6 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     audio_solved = await solve_captcha_via_free_audio(page, bframe, chat_id, context)
                     
                     if audio_solved == "RETRY":
-                        # إذا طلبت جوجل حل إضافي، نستمر بالحلقة ولا نكسرها
                         continue
                     elif audio_solved == True:
                         await page.wait_for_timeout(3000)
@@ -329,37 +313,74 @@ async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         await context.bot.send_message(chat_id=chat_id, text=f"⚠️ فشل الحل، جاري المحاولة...")
 
+                # ==========================================
+                # الخطوة الجديدة: الضغط على زر Obtener código
+                # ==========================================
+                await context.bot.send_message(chat_id=chat_id, text="🖱️ جاري الضغط على الزر النهائي لإنشاء الرابط...")
+                try:
+                    # البحث عن الزر الأزرق الذي يحتوي على كلمة Obtener
+                    final_btn = await page.query_selector("button:has-text('Obtener'), button[type='submit']")
+                    if final_btn:
+                        await human_delay(1.0, 2.0)
+                        await final_btn.click(force=True)
+                    elif email_input:
+                        # بديل في حال لم يتم العثور على الزر: الضغط على Enter في حقل الإيميل
+                        await email_input.press("Enter")
+                except Exception as e:
+                    print(f"خطأ في الضغط على الزر النهائي: {e}")
+                
+                # انتظار 6 ثواني ليتم إنشاء الرابط وتحميل الصفحة
+                await page.wait_for_timeout(6000)
+
                 shot3 = f"step_3_result_{i+1}.png"
                 await page.screenshot(path=shot3, full_page=True)
                 with open(shot3, "rb") as photo:
-                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1}:")
+                    await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=f"🎯 نتيجة الطلب رقم {i+1} بعد الضغط:")
 
+                # ==========================================
+                # التحديث الجديد: استخراج الرابط بشكل شامل
+                # ==========================================
                 try:
                     extracted_values = await page.evaluate("""() => {
-                        const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
                         let values = [];
+                        
+                        // 1. البحث في حقول الإدخال
+                        const inputs = document.querySelectorAll('input[type="text"], input[type="url"], input:not([type]), textarea');
                         inputs.forEach(el => {
-                            if (el.value && el.value.trim().length > 3 && !el.value.includes('@')) {
+                            if (el.value && el.value.trim().length > 10 && !el.value.includes('@')) {
                                 values.push(el.value.trim());
                             }
                         });
+                        
+                        // 2. البحث عن أي نص يحتوي على رابط ويب في الصفحة
+                        if (values.length === 0) {
+                            const allText = document.body.innerText;
+                            // استخراج أي رابط يبدأ بـ http أو https
+                            const urlRegex = /(https?:\/\/[^\s]+)/g;
+                            const matches = allText.match(urlRegex);
+                            if (matches) {
+                                values = values.concat(matches);
+                            }
+                        }
+                        
                         return values;
                     }""")
                     
                     for val in extracted_values:
-                        if val not in all_extracted_codes and SITE_URL not in val:
+                        # فلترة الروابط حتى لا نأخذ رابط الكابتشا أو الموقع الأساسي بالغلط
+                        if val not in all_extracted_codes and "recaptcha" not in val and SITE_URL not in val:
                             all_extracted_codes.append(val)
                 except Exception as e:
-                    print(f"خطأ في استخراج الكود من الحقول: {e}")
+                    print(f"خطأ في استخراج الكود/الرابط: {e}")
 
-                await human_delay(3.0, 5.0) # انتظار طويل بين كل طلب وطلب لتخفيف الضغط
+                await human_delay(3.0, 5.0)
 
             if all_extracted_codes:
                 final_text = "\n".join(all_extracted_codes)
-                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الأكواد المستخرجة:\n{final_text}")
-                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} كود إلى قناتك!")
+                await context.bot.send_message(chat_id=TARGET_CHANNEL_ID, text=f"🚀 الروابط المستخرجة:\n{final_text}")
+                await status_msg.edit_text(f"✅ تمت العملية بنجاح وتم إرسال {len(all_extracted_codes)} رابط إلى قناتك!")
             else:
-                await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصور المرسلة للتأكد من النتيجة.")
+                await status_msg.edit_text(f"✅ انتهت العملية، يرجى مراجعة الصورة الأخيرة للتأكد من النتيجة (لم يتم العثور على رابط).")
                 
             await browser.close()
             
